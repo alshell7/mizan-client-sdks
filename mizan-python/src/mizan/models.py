@@ -8,12 +8,9 @@ of precision in application and JSON layers.
 from __future__ import annotations
 
 from typing import Any, Literal, TypeAlias, TypedDict
+from .enums import BillingTerm, BudgetAction, BudgetMetric, Capability, Channel, Currency, FeatureCode, PaymentStatus, PlanId, RecurringAddonCode, RefundStatus
 
 ExactAmount: TypeAlias = str
-PlanId = Literal["start", "growth", "command"]
-BillingTerm = Literal["monthly", "quarterly", "semi_annual", "annual"]
-BudgetMetric = Literal["azeer_unit_millis", "money_minor", "quantity"]
-BudgetAction = Literal["alert", "pause"]
 
 
 class _RecurringAddonOptional(TypedDict, total=False):
@@ -23,7 +20,7 @@ class _RecurringAddonOptional(TypedDict, total=False):
 
 
 class RecurringAddon(_RecurringAddonOptional):
-    code: str
+    code: RecurringAddonCode
 
 
 class _ServiceLineOptional(TypedDict, total=False):
@@ -37,6 +34,8 @@ class ServiceLine(_ServiceLineOptional):
 
 
 class _ActivationOptional(TypedDict, total=False):
+    plan_id: PlanId
+    plan_configuration_id: str
     timezone: str
     addons: list[RecurringAddon]
     services: list[ServiceLine]
@@ -44,17 +43,17 @@ class _ActivationOptional(TypedDict, total=False):
 
 class ActivationRequest(_ActivationOptional):
     catalog_version: str
-    plan_id: PlanId
     term: BillingTerm
     seats: int
-    payment_status: Literal["confirmed"]
+    payment_status: PaymentStatus
     payment_event_id: str
-    currency: Literal["SAR"]
+    currency: Currency
     paid_total_minor: ExactAmount
 
 
 class _SubscriptionChangeOptional(TypedDict, total=False):
     plan_id: PlanId
+    plan_configuration_id: str
     term: BillingTerm
     seats: int
     addons: list[RecurringAddon]
@@ -72,28 +71,28 @@ class CancellationRequest(TypedDict, total=False):
 
 
 class _RenewalOptional(TypedDict, total=False):
-    currency: Literal["SAR"]
+    currency: Currency
     paid_total_minor: ExactAmount
 
 
 class RenewalEventRequest(_RenewalOptional):
     payment_event_id: str
-    payment_status: Literal["confirmed", "failed"]
+    payment_status: PaymentStatus
 
 
 class ConfirmedTopUp(TypedDict):
     amount_minor: ExactAmount
     payment_event_id: str
-    payment_status: Literal["confirmed"]
-    currency: Literal["SAR"]
+    payment_status: PaymentStatus
+    currency: Currency
     paid_total_minor: ExactAmount
 
 
 class ProviderRefundRequest(TypedDict):
     amount_minor: ExactAmount
     payment_event_id: str
-    refund_status: Literal["confirmed"]
-    currency: Literal["SAR"]
+    refund_status: RefundStatus
+    currency: Currency
     refunded_total_minor: ExactAmount
     reason: str
 
@@ -114,7 +113,7 @@ class BudgetRequest(_BudgetOptional):
 
 class UsageMetadata(TypedDict, total=False):
     actor: dict[str, str]
-    channel: str
+    channel: Channel
     channel_account_id: str
     provider: str
     provider_event_id: str
@@ -133,13 +132,13 @@ class ChargeInput(TypedDict, total=False):
 
 
 class ConsumptionComponent(ChargeInput):
-    feature_code: str
+    feature_code: FeatureCode
 
 
 class ConsumptionRequest(ChargeInput, total=False):
     source_event_id: str
     occurred_at: str
-    feature_code: str
+    feature_code: FeatureCode
     components: list[ConsumptionComponent]
 
 
@@ -284,7 +283,7 @@ class EligibilityResponse(BaseEnvelope):
 
 
 class EntitlementResult(TypedDict, total=False):
-    capability: str
+    capability: Capability
     enabled: bool
     plan_id: str
     fair_use: dict[str, int | None]
@@ -343,6 +342,7 @@ class CatalogResponse(TypedDict):
     recurring_addons: dict[str, dict[str, Any]]
     feature_prices: dict[str, dict[str, Any]]
     unit_topups: dict[str, ExactAmount]
+    contract_values: dict[str, list[str]]
 
 
 ApiResponse: TypeAlias = dict[str, Any]

@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const Version = "1.2.0"
+const Version = "1.3.0"
 
 type ExactAmount string
 type Response map[string]any
@@ -37,6 +37,139 @@ const (
 	TermAnnual     BillingTerm = "annual"
 )
 
+type FeatureCode string
+
+const (
+	FeatureConversation24H              FeatureCode = "conversation_24h"
+	FeatureOutboundDeliveredMessage     FeatureCode = "outbound_delivered_message"
+	FeatureAIAssistOverAllowance        FeatureCode = "ai_assist_action_over_allowance"
+	FeatureVoiceAIStartedMinute         FeatureCode = "voice_ai_started_minute"
+	FeatureAIReplyHandling              FeatureCode = "ai_reply_handling"
+	FeatureWhatsAppMetaMarketingMessage FeatureCode = "whatsapp_meta_marketing_msg"
+	FeatureTelephonyVoiceMinute         FeatureCode = "telephony_voice_minute"
+	FeatureInboundVoiceMinute           FeatureCode = "inbound_voice_minute"
+	FeatureOtherProviderCharge          FeatureCode = "other_provider_charge"
+)
+
+type Currency string
+
+const CurrencySAR Currency = "SAR"
+
+type PaymentStatus string
+
+const (
+	PaymentConfirmed PaymentStatus = "confirmed"
+	PaymentFailed    PaymentStatus = "failed"
+)
+
+type RefundStatus string
+
+const RefundConfirmed RefundStatus = "confirmed"
+
+type BudgetMetric string
+
+const (
+	BudgetAzeerUnitMillis BudgetMetric = "azeer_unit_millis"
+	BudgetMoneyMinor      BudgetMetric = "money_minor"
+	BudgetQuantity        BudgetMetric = "quantity"
+)
+
+type BudgetPeriod string
+
+const BudgetSubscriptionMonth BudgetPeriod = "subscription_month"
+
+type BudgetAction string
+
+const (
+	BudgetAlert BudgetAction = "alert"
+	BudgetPause BudgetAction = "pause"
+)
+
+type Channel string
+
+const (
+	ChannelWhatsApp  Channel = "whatsapp"
+	ChannelInstagram Channel = "instagram"
+	ChannelFacebook  Channel = "facebook"
+	ChannelTikTok    Channel = "tiktok"
+	ChannelTelephony Channel = "telephony"
+	ChannelWebchat   Channel = "webchat"
+)
+
+type RecurringAddonCode string
+
+const (
+	AddonWhatsApp011Landline         RecurringAddonCode = "whatsapp_011_landline"
+	AddonWhatsApp05Mobile            RecurringAddonCode = "whatsapp_05_mobile"
+	AddonConcurrentCalls5            RecurringAddonCode = "concurrent_calls_5"
+	AddonConcurrentCalls10           RecurringAddonCode = "concurrent_calls_10"
+	AddonConcurrentCalls20           RecurringAddonCode = "concurrent_calls_20"
+	AddonAutoDialer                  RecurringAddonCode = "auto_dialer"
+	AddonCSATStart                   RecurringAddonCode = "csat_start"
+	AddonInstagramAdditionalAccounts RecurringAddonCode = "instagram_additional_accounts"
+	AddonWhatsApp9200                RecurringAddonCode = "whatsapp_9200"
+	AddonTollFree800                 RecurringAddonCode = "toll_free_800"
+	AddonInternationalNumber         RecurringAddonCode = "international_number"
+	AddonOutboundMinutes500          RecurringAddonCode = "outbound_minute_bundle_500"
+	AddonOutboundMinutes1000         RecurringAddonCode = "outbound_minute_bundle_1000"
+	AddonVoiceBroadcast              RecurringAddonCode = "voice_broadcast"
+	AddonExtendedRecordingRetention  RecurringAddonCode = "recording_retention_extended"
+)
+
+type ErrorCode string
+
+const (
+	ErrCodeInvalidRequest                   ErrorCode = "INVALID_REQUEST"
+	ErrCodeUnauthorized                     ErrorCode = "UNAUTHORIZED"
+	ErrCodeForbidden                        ErrorCode = "FORBIDDEN"
+	ErrCodeNotFound                         ErrorCode = "NOT_FOUND"
+	ErrCodeAccountInactive                  ErrorCode = "ACCOUNT_INACTIVE"
+	ErrCodeSubscriptionInactive             ErrorCode = "SUBSCRIPTION_INACTIVE"
+	ErrCodeFeatureDisabled                  ErrorCode = "FEATURE_DISABLED"
+	ErrCodeFeaturePausedBudget              ErrorCode = "FEATURE_PAUSED_BUDGET"
+	ErrCodeFeaturePausedManual              ErrorCode = "FEATURE_PAUSED_MANUAL"
+	ErrCodeInsufficientAzeerUnits           ErrorCode = "INSUFFICIENT_AZEER_UNITS"
+	ErrCodeInsufficientProviderBalance      ErrorCode = "INSUFFICIENT_PROVIDER_BALANCE"
+	ErrCodePaymentAmountMismatch            ErrorCode = "PAYMENT_AMOUNT_MISMATCH"
+	ErrCodeIdempotencyKeyReused             ErrorCode = "IDEMPOTENCY_KEY_REUSED"
+	ErrCodeInternalRetryable                ErrorCode = "INTERNAL_RETRYABLE"
+	ErrCodeDependencyTemporarilyUnavailable ErrorCode = "DEPENDENCY_TEMPORARILY_UNAVAILABLE"
+	ErrCodeDuplicatePaymentEvent            ErrorCode = "DUPLICATE_PAYMENT_EVENT"
+	ErrCodeDuplicateProviderEvent           ErrorCode = "DUPLICATE_PROVIDER_EVENT"
+	ErrCodeDuplicateSourceEvent             ErrorCode = "DUPLICATE_SOURCE_EVENT"
+	ErrCodeEarlyRenewalEvent                ErrorCode = "EARLY_RENEWAL_EVENT"
+	ErrCodeInvalidQuantity                  ErrorCode = "INVALID_QUANTITY"
+	ErrCodeInvariantViolation               ErrorCode = "INVARIANT_VIOLATION"
+	ErrCodeMisconfigured                    ErrorCode = "MISCONFIGURED"
+	ErrCodeQuoteRequired                    ErrorCode = "QUOTE_REQUIRED"
+	ErrCodeQuoteVerificationUnavailable     ErrorCode = "QUOTE_VERIFICATION_UNAVAILABLE"
+	ErrCodeRequestTimestampOutOfRange       ErrorCode = "REQUEST_TIMESTAMP_OUT_OF_RANGE"
+	ErrCodeSensitiveReserveReached          ErrorCode = "SENSITIVE_RESERVE_REACHED"
+	ErrCodeStalePlanVersion                 ErrorCode = "STALE_PLAN_VERSION"
+	ErrCodeSubscriptionChangePending        ErrorCode = "SUBSCRIPTION_CHANGE_PENDING"
+)
+
+type DomainError ErrorCode
+
+func (e DomainError) Error() string { return "mizan: " + string(e) }
+
+var (
+	ErrInvalidRequest              = DomainError(ErrCodeInvalidRequest)
+	ErrUnauthorized                = DomainError(ErrCodeUnauthorized)
+	ErrForbidden                   = DomainError(ErrCodeForbidden)
+	ErrNotFound                    = DomainError(ErrCodeNotFound)
+	ErrAccountInactive             = DomainError(ErrCodeAccountInactive)
+	ErrSubscriptionInactive        = DomainError(ErrCodeSubscriptionInactive)
+	ErrFeatureDisabled             = DomainError(ErrCodeFeatureDisabled)
+	ErrFeaturePausedBudget         = DomainError(ErrCodeFeaturePausedBudget)
+	ErrFeaturePausedManual         = DomainError(ErrCodeFeaturePausedManual)
+	ErrInsufficientAzeerUnits      = DomainError(ErrCodeInsufficientAzeerUnits)
+	ErrInsufficientProviderBalance = DomainError(ErrCodeInsufficientProviderBalance)
+	ErrPaymentAmountMismatch       = DomainError(ErrCodePaymentAmountMismatch)
+	ErrIdempotencyKeyReused        = DomainError(ErrCodeIdempotencyKeyReused)
+	ErrInternalRetryable           = DomainError(ErrCodeInternalRetryable)
+)
+
 type Balance struct {
 	AzeerUnitMillis      ExactAmount `json:"azeer_unit_millis"`
 	ProviderBalanceMinor ExactAmount `json:"provider_balance_minor"`
@@ -54,7 +187,7 @@ type InvoiceLine struct {
 
 type Invoice struct {
 	ID                 string        `json:"id"`
-	Currency           string        `json:"currency"`
+	Currency           Currency      `json:"currency"`
 	EligibleGrossMinor ExactAmount   `json:"eligible_gross_minor"`
 	DiscountMinor      ExactAmount   `json:"discount_minor"`
 	SubtotalMinor      ExactAmount   `json:"subtotal_minor"`
@@ -89,7 +222,7 @@ type ConsumptionResult struct {
 }
 
 type EntitlementResult struct {
-	Capability string         `json:"capability"`
+	Capability Capability     `json:"capability"`
 	Enabled    bool           `json:"enabled"`
 	PlanID     string         `json:"plan_id"`
 	FairUse    map[string]any `json:"fair_use"`
@@ -130,34 +263,36 @@ func DecodeData[T any](response Response) (T, error) {
 }
 
 type RecurringAddon struct {
-	Code                 string      `json:"code"`
-	Quantity             ExactAmount `json:"quantity,omitempty"`
-	ApprovedQuoteID      string      `json:"approved_quote_id,omitempty"`
-	ApprovedMonthlyMinor ExactAmount `json:"approved_monthly_minor,omitempty"`
+	Code                 RecurringAddonCode `json:"code"`
+	Quantity             ExactAmount        `json:"quantity,omitempty"`
+	ApprovedQuoteID      string             `json:"approved_quote_id,omitempty"`
+	ApprovedMonthlyMinor ExactAmount        `json:"approved_monthly_minor,omitempty"`
 }
 
 type ActivationRequest struct {
-	CatalogVersion string           `json:"catalog_version"`
-	PlanID         PlanID           `json:"plan_id"`
-	Term           BillingTerm      `json:"term"`
-	Seats          int              `json:"seats"`
-	Timezone       string           `json:"timezone,omitempty"`
-	PaymentStatus  string           `json:"payment_status"`
-	PaymentEventID string           `json:"payment_event_id"`
-	Currency       string           `json:"currency"`
-	PaidTotalMinor ExactAmount      `json:"paid_total_minor"`
-	Addons         []RecurringAddon `json:"addons,omitempty"`
-	Services       []map[string]any `json:"services,omitempty"`
+	CatalogVersion      string           `json:"catalog_version"`
+	PlanID              PlanID           `json:"plan_id,omitempty"`
+	PlanConfigurationID string           `json:"plan_configuration_id,omitempty"`
+	Term                BillingTerm      `json:"term"`
+	Seats               int              `json:"seats"`
+	Timezone            string           `json:"timezone,omitempty"`
+	PaymentStatus       PaymentStatus    `json:"payment_status"`
+	PaymentEventID      string           `json:"payment_event_id"`
+	Currency            Currency         `json:"currency"`
+	PaidTotalMinor      ExactAmount      `json:"paid_total_minor"`
+	Addons              []RecurringAddon `json:"addons,omitempty"`
+	Services            []map[string]any `json:"services,omitempty"`
 }
 
 type SubscriptionChangeRequest struct {
-	CatalogVersion string           `json:"catalog_version"`
-	PlanID         PlanID           `json:"plan_id,omitempty"`
-	Term           BillingTerm      `json:"term,omitempty"`
-	Seats          int              `json:"seats,omitempty"`
-	Addons         []RecurringAddon `json:"addons,omitempty"`
-	RequestedBy    string           `json:"requested_by,omitempty"`
-	Reason         string           `json:"reason,omitempty"`
+	CatalogVersion      string           `json:"catalog_version"`
+	PlanID              PlanID           `json:"plan_id,omitempty"`
+	PlanConfigurationID string           `json:"plan_configuration_id,omitempty"`
+	Term                BillingTerm      `json:"term,omitempty"`
+	Seats               int              `json:"seats,omitempty"`
+	Addons              []RecurringAddon `json:"addons,omitempty"`
+	RequestedBy         string           `json:"requested_by,omitempty"`
+	Reason              string           `json:"reason,omitempty"`
 }
 
 type CancellationRequest struct {
@@ -166,43 +301,43 @@ type CancellationRequest struct {
 }
 
 type RenewalEventRequest struct {
-	PaymentEventID string      `json:"payment_event_id"`
-	PaymentStatus  string      `json:"payment_status"`
-	Currency       string      `json:"currency,omitempty"`
-	PaidTotalMinor ExactAmount `json:"paid_total_minor,omitempty"`
+	PaymentEventID string        `json:"payment_event_id"`
+	PaymentStatus  PaymentStatus `json:"payment_status"`
+	Currency       Currency      `json:"currency,omitempty"`
+	PaidTotalMinor ExactAmount   `json:"paid_total_minor,omitempty"`
 }
 
 type ConfirmedTopUp struct {
-	AmountMinor    ExactAmount `json:"amount_minor"`
-	PaymentEventID string      `json:"payment_event_id"`
-	PaymentStatus  string      `json:"payment_status"`
-	Currency       string      `json:"currency"`
-	PaidTotalMinor ExactAmount `json:"paid_total_minor"`
+	AmountMinor    ExactAmount   `json:"amount_minor"`
+	PaymentEventID string        `json:"payment_event_id"`
+	PaymentStatus  PaymentStatus `json:"payment_status"`
+	Currency       Currency      `json:"currency"`
+	PaidTotalMinor ExactAmount   `json:"paid_total_minor"`
 }
 
 type ProviderRefundRequest struct {
-	AmountMinor        ExactAmount `json:"amount_minor"`
-	PaymentEventID     string      `json:"payment_event_id"`
-	RefundStatus       string      `json:"refund_status"`
-	Currency           string      `json:"currency"`
-	RefundedTotalMinor ExactAmount `json:"refunded_total_minor"`
-	Reason             string      `json:"reason"`
+	AmountMinor        ExactAmount  `json:"amount_minor"`
+	PaymentEventID     string       `json:"payment_event_id"`
+	RefundStatus       RefundStatus `json:"refund_status"`
+	Currency           Currency     `json:"currency"`
+	RefundedTotalMinor ExactAmount  `json:"refunded_total_minor"`
+	Reason             string       `json:"reason"`
 }
 
 type BudgetRequest struct {
-	Metric          string      `json:"metric"`
-	Period          string      `json:"period"`
-	Limit           ExactAmount `json:"limit"`
-	WarningBPS      int         `json:"warning_bps,omitempty"`
-	Action          string      `json:"action"`
-	Sensitive       bool        `json:"sensitive,omitempty"`
-	AbsoluteReserve ExactAmount `json:"absolute_reserve,omitempty"`
-	ReserveBPS      int         `json:"reserve_bps,omitempty"`
+	Metric          BudgetMetric `json:"metric"`
+	Period          BudgetPeriod `json:"period"`
+	Limit           ExactAmount  `json:"limit"`
+	WarningBPS      int          `json:"warning_bps,omitempty"`
+	Action          BudgetAction `json:"action"`
+	Sensitive       bool         `json:"sensitive,omitempty"`
+	AbsoluteReserve ExactAmount  `json:"absolute_reserve,omitempty"`
+	ReserveBPS      int          `json:"reserve_bps,omitempty"`
 }
 
 type UsageMetadata struct {
 	Actor            map[string]string `json:"actor,omitempty"`
-	Channel          string            `json:"channel,omitempty"`
+	Channel          Channel           `json:"channel,omitempty"`
 	ChannelAccountID string            `json:"channel_account_id,omitempty"`
 	Provider         string            `json:"provider,omitempty"`
 	ProviderEventID  string            `json:"provider_event_id,omitempty"`
@@ -214,7 +349,7 @@ type UsageMetadata struct {
 }
 
 type ConsumptionComponent struct {
-	FeatureCode         string         `json:"feature_code"`
+	FeatureCode         FeatureCode    `json:"feature_code"`
 	Quantity            string         `json:"quantity,omitempty"`
 	DurationSeconds     ExactAmount    `json:"duration_seconds,omitempty"`
 	ProviderAmountMinor ExactAmount    `json:"provider_amount_minor,omitempty"`
@@ -224,7 +359,7 @@ type ConsumptionComponent struct {
 type ConsumptionRequest struct {
 	SourceEventID       string                 `json:"source_event_id"`
 	OccurredAt          time.Time              `json:"occurred_at"`
-	FeatureCode         string                 `json:"feature_code,omitempty"`
+	FeatureCode         FeatureCode            `json:"feature_code,omitempty"`
 	Quantity            string                 `json:"quantity,omitempty"`
 	DurationSeconds     ExactAmount            `json:"duration_seconds,omitempty"`
 	ProviderAmountMinor ExactAmount            `json:"provider_amount_minor,omitempty"`
@@ -242,7 +377,7 @@ type EligibilityRequest struct {
 
 type APIError struct {
 	Status         int
-	Code           string
+	Code           ErrorCode
 	Message        string
 	Retryable      bool
 	Details        map[string]any
@@ -251,6 +386,17 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string { return fmt.Sprintf("mizan: %s: %s", e.Code, e.Message) }
+func (e *APIError) Is(target error) bool {
+	code, ok := target.(DomainError)
+	return ok && ErrorCode(code) == e.Code
+}
+
+func NewConfirmedTopUp(amount ExactAmount, paymentEventID string, paidTotal ExactAmount) ConfirmedTopUp {
+	return ConfirmedTopUp{AmountMinor: amount, PaymentEventID: paymentEventID, PaymentStatus: PaymentConfirmed, Currency: CurrencySAR, PaidTotalMinor: paidTotal}
+}
+func NewBudget(metric BudgetMetric, limit ExactAmount, action BudgetAction) BudgetRequest {
+	return BudgetRequest{Metric: metric, Period: BudgetSubscriptionMonth, Limit: limit, WarningBPS: 8000, Action: action}
+}
 
 type TransportError struct {
 	Err            error
@@ -315,15 +461,15 @@ func (c *Client) TopUpProviderBalance(ctx context.Context, businessID string, in
 func (c *Client) RefundProviderBalance(ctx context.Context, businessID string, in ProviderRefundRequest, idempotencyKey string) (Response, error) {
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "provider-balance/refunds"), businessID, in, idempotencyKey)
 }
-func (c *Client) SetFeatureBudget(ctx context.Context, businessID, featureCode string, in BudgetRequest, idempotencyKey string) (Response, error) {
-	return c.mutate(ctx, http.MethodPut, c.businessPath(businessID, "features/"+url.PathEscape(featureCode)+"/budget"), businessID, in, idempotencyKey)
+func (c *Client) SetFeatureBudget(ctx context.Context, businessID string, featureCode FeatureCode, in BudgetRequest, idempotencyKey string) (Response, error) {
+	return c.mutate(ctx, http.MethodPut, c.businessPath(businessID, "features/"+url.PathEscape(string(featureCode))+"/budget"), businessID, in, idempotencyKey)
 }
-func (c *Client) CheckEligibility(ctx context.Context, businessID, featureCode string, in EligibilityRequest) (Response, error) {
-	return c.request(ctx, http.MethodPost, c.businessPath(businessID, "features/"+url.PathEscape(featureCode)+"/eligibility"), businessID, in, "", false)
+func (c *Client) CheckEligibility(ctx context.Context, businessID string, featureCode FeatureCode, in EligibilityRequest) (Response, error) {
+	return c.request(ctx, http.MethodPost, c.businessPath(businessID, "features/"+url.PathEscape(string(featureCode))+"/eligibility"), businessID, in, "", false)
 }
 
-func (c *Client) GetEntitlement(ctx context.Context, businessID, capability string) (Response, error) {
-	return c.request(ctx, http.MethodGet, c.businessPath(businessID, "entitlements/"+url.PathEscape(capability)), businessID, nil, "", false)
+func (c *Client) GetEntitlement(ctx context.Context, businessID string, capability Capability) (Response, error) {
+	return c.request(ctx, http.MethodGet, c.businessPath(businessID, "entitlements/"+url.PathEscape(string(capability))), businessID, nil, "", false)
 }
 
 func (c *Client) GetCatalog(ctx context.Context) (Response, error) {
@@ -439,10 +585,10 @@ func (c *Client) request(ctx context.Context, method, path, businessID string, i
 }
 
 func decodeAPIError(status int, body Response) *APIError {
-	e := &APIError{Status: status, Code: "HTTP_ERROR", Message: fmt.Sprintf("HTTP %d", status), Details: map[string]any{}}
+	e := &APIError{Status: status, Code: ErrorCode("HTTP_ERROR"), Message: fmt.Sprintf("HTTP %d", status), Details: map[string]any{}}
 	if raw, ok := body["error"].(map[string]any); ok {
 		if v, ok := raw["code"].(string); ok {
-			e.Code = v
+			e.Code = ErrorCode(v)
 		}
 		if v, ok := raw["message"].(string); ok {
 			e.Message = v

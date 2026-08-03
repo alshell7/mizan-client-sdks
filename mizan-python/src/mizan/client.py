@@ -11,6 +11,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from ._version import __version__
+from .enums import Capability, FeatureCode
 from .models import (
     ActivationRequest,
     ActivationResponse,
@@ -70,6 +71,52 @@ class MizanAPIError(MizanError):
         self.details = dict(details or {})
         self.request_id = request_id
         self.idempotency_key = idempotency_key
+
+class AccountInactiveError(MizanAPIError): pass
+class DependencyTemporarilyUnavailableError(MizanAPIError): pass
+class DuplicatePaymentEventError(MizanAPIError): pass
+class DuplicateProviderEventError(MizanAPIError): pass
+class DuplicateSourceEventError(MizanAPIError): pass
+class EarlyRenewalEventError(MizanAPIError): pass
+class FeatureDisabledError(MizanAPIError): pass
+class FeaturePausedBudgetError(MizanAPIError): pass
+class FeaturePausedManualError(MizanAPIError): pass
+class ForbiddenError(MizanAPIError): pass
+class IdempotencyKeyReusedError(MizanAPIError): pass
+class InsufficientAzeerUnitsError(MizanAPIError): pass
+class InsufficientProviderBalanceError(MizanAPIError): pass
+class InternalRetryableError(MizanAPIError): pass
+class InvalidQuantityError(MizanAPIError): pass
+class InvalidRequestError(MizanAPIError): pass
+class InvariantViolationError(MizanAPIError): pass
+class MisconfiguredError(MizanAPIError): pass
+class NotFoundError(MizanAPIError): pass
+class PaymentAmountMismatchError(MizanAPIError): pass
+class QuoteRequiredError(MizanAPIError): pass
+class QuoteVerificationUnavailableError(MizanAPIError): pass
+class RequestTimestampOutOfRangeError(MizanAPIError): pass
+class SensitiveReserveReachedError(MizanAPIError): pass
+class StalePlanVersionError(MizanAPIError): pass
+class SubscriptionChangePendingError(MizanAPIError): pass
+class SubscriptionInactiveError(MizanAPIError): pass
+class UnauthorizedError(MizanAPIError): pass
+
+_API_ERROR_TYPES = {
+    "ACCOUNT_INACTIVE": AccountInactiveError, "DEPENDENCY_TEMPORARILY_UNAVAILABLE": DependencyTemporarilyUnavailableError,
+    "DUPLICATE_PAYMENT_EVENT": DuplicatePaymentEventError, "DUPLICATE_PROVIDER_EVENT": DuplicateProviderEventError,
+    "DUPLICATE_SOURCE_EVENT": DuplicateSourceEventError, "EARLY_RENEWAL_EVENT": EarlyRenewalEventError,
+    "FEATURE_DISABLED": FeatureDisabledError, "FEATURE_PAUSED_BUDGET": FeaturePausedBudgetError,
+    "FEATURE_PAUSED_MANUAL": FeaturePausedManualError, "FORBIDDEN": ForbiddenError,
+    "IDEMPOTENCY_KEY_REUSED": IdempotencyKeyReusedError, "INSUFFICIENT_AZEER_UNITS": InsufficientAzeerUnitsError,
+    "INSUFFICIENT_PROVIDER_BALANCE": InsufficientProviderBalanceError, "INTERNAL_RETRYABLE": InternalRetryableError,
+    "INVALID_QUANTITY": InvalidQuantityError, "INVALID_REQUEST": InvalidRequestError,
+    "INVARIANT_VIOLATION": InvariantViolationError, "MISCONFIGURED": MisconfiguredError, "NOT_FOUND": NotFoundError,
+    "PAYMENT_AMOUNT_MISMATCH": PaymentAmountMismatchError, "QUOTE_REQUIRED": QuoteRequiredError,
+    "QUOTE_VERIFICATION_UNAVAILABLE": QuoteVerificationUnavailableError,
+    "REQUEST_TIMESTAMP_OUT_OF_RANGE": RequestTimestampOutOfRangeError, "SENSITIVE_RESERVE_REACHED": SensitiveReserveReachedError,
+    "STALE_PLAN_VERSION": StalePlanVersionError, "SUBSCRIPTION_CHANGE_PENDING": SubscriptionChangePendingError,
+    "SUBSCRIPTION_INACTIVE": SubscriptionInactiveError, "UNAUTHORIZED": UnauthorizedError,
+}
 
 
 class MizanTransportError(MizanError):
@@ -161,15 +208,15 @@ class MizanClient:
         """Apply a confirmed provider-balance refund."""
         return cast(RefundResponse, self._request("POST", self._business_path(business_id, "provider-balance/refunds"), request, business_id, idempotency_key))
 
-    def set_feature_budget(self, business_id: str, feature_code: str, request: BudgetRequest, *, idempotency_key: str | None = None) -> BudgetResponse:
+    def set_feature_budget(self, business_id: str, feature_code: FeatureCode, request: BudgetRequest, *, idempotency_key: str | None = None) -> BudgetResponse:
         path = self._business_path(business_id, f"features/{quote(feature_code, safe='')}/budget")
         return cast(BudgetResponse, self._request("PUT", path, request, business_id, idempotency_key))
 
-    def check_eligibility(self, business_id: str, feature_code: str, request: EligibilityRequest) -> EligibilityResponse:
+    def check_eligibility(self, business_id: str, feature_code: FeatureCode, request: EligibilityRequest) -> EligibilityResponse:
         path = self._business_path(business_id, f"features/{quote(feature_code, safe='')}/eligibility")
         return cast(EligibilityResponse, self._request("POST", path, request, business_id, None, mutation=False))
 
-    def get_entitlement(self, business_id: str, capability: str) -> EntitlementResponse:
+    def get_entitlement(self, business_id: str, capability: Capability) -> EntitlementResponse:
         path = self._business_path(business_id, f"entitlements/{quote(capability, safe='')}")
         return cast(EntitlementResponse, self._request("GET", path, None, business_id, None, mutation=False))
 
@@ -238,9 +285,10 @@ class MizanClient:
                 error = payload.get("error", {})
                 if not isinstance(error, dict):
                     raise MizanProtocolError("Mizan returned an invalid error envelope", request_id=correlation_id, idempotency_key=key)
-                api_error = MizanAPIError(
+                error_code = error.get("code", "HTTP_ERROR")
+                api_error = _API_ERROR_TYPES.get(error_code, MizanAPIError)(
                     status=status,
-                    code=error.get("code", "HTTP_ERROR"),
+                    code=error_code,
                     message=error.get("message", f"Mizan returned HTTP {status}"),
                     retryable=bool(error.get("retryable", False)),
                     details=error.get("details", {}),

@@ -27,6 +27,11 @@ sequenceDiagram
 The package name is `mizan-billing`; the Python import is `mizan`. The Go module is
 `github.com/alshell7/mizan-client-sdks/mizan-go`.
 
+Template activations use `plan_id`. When an operator has approved a business-specific plan through the Mizan
+admin API/UI, use `plan_configuration_id` instead. Send exactly one of those fields. Delivery endpoint and plan
+approval operations intentionally require the separate admin credential and are not exposed by these runtime
+client SDKs.
+
 ## Safety contract
 
 - Money is a base-10 integer halala string: `"75"` is SAR 0.75.

@@ -54,6 +54,22 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(requests[1].full_url.endswith("/v1/businesses/business-1/entitlements/rbac_audit"))
         self.assertIsNone(requests[0].get_header("Idempotency-key"))
 
+    def test_custom_plan_activation_serializes_the_immutable_configuration_id(self):
+        requests = []
+        client = MizanClient(
+            "https://billing.test", "secret",
+            transport=lambda request, timeout: (requests.append(request) or (201, {}, b'{"data":{}}')),
+        )
+        client.activate_subscription("business-1", {
+            "catalog_version": "azeer-2026-08-03-v2",
+            "plan_configuration_id": "plan_cfg_1",
+            "term": "monthly", "seats": 10, "payment_status": "confirmed",
+            "payment_event_id": "pay_1", "currency": "SAR", "paid_total_minor": "1000",
+        }, idempotency_key="activate-custom")
+        body = json.loads(requests[0].data)
+        self.assertEqual(body["plan_configuration_id"], "plan_cfg_1")
+        self.assertNotIn("plan_id", body)
+
     def test_generated_idempotency_key_is_reused_and_exposed_after_unknown_outcome(self):
         requests = []
 

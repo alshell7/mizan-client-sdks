@@ -216,3 +216,42 @@ func TestConfigurationURLsPaginationAndHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestContractVocabularyAndBuilders(t *testing.T) {
+	if got := AllFeatureCodes(); len(got) != 9 || got[1] != FeatureOutboundDeliveredMessage {
+		t.Fatalf("unexpected feature vocabulary: %#v", got)
+	}
+	topUp := NewConfirmedTopUp("100", "pay_1", "115")
+	if topUp.PaymentStatus != PaymentConfirmed || topUp.Currency != CurrencySAR {
+		t.Fatalf("fixed protocol values were not populated: %#v", topUp)
+	}
+	budget := NewBudget(BudgetQuantity, "10", BudgetPause)
+	if budget.Period != BudgetSubscriptionMonth || budget.WarningBPS != 8000 {
+		t.Fatalf("budget defaults were not populated: %#v", budget)
+	}
+	apiErr := &APIError{Code: ErrCodeInsufficientProviderBalance}
+	if !errors.Is(apiErr, ErrInsufficientProviderBalance) {
+		t.Fatal("typed API error did not match its domain sentinel")
+	}
+}
+
+func TestCustomPlanActivationJSONUsesConfigurationID(t *testing.T) {
+	body, err := json.Marshal(ActivationRequest{
+		CatalogVersion: "azeer-2026-08-03-v2", PlanConfigurationID: "plan_cfg_1",
+		Term: TermMonthly, Seats: 10, PaymentStatus: PaymentConfirmed,
+		PaymentEventID: "pay_1", Currency: CurrencySAR, PaidTotalMinor: "1000",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["plan_configuration_id"] != "plan_cfg_1" {
+		t.Fatalf("missing plan configuration: %s", body)
+	}
+	if _, exists := decoded["plan_id"]; exists {
+		t.Fatalf("empty template plan should not be serialized: %s", body)
+	}
+}
