@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mizan-billing"
+version = "1.2.0"
+description = "Official Python SDK for the Mizan billing and metering API"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "alshell7" }]
+maintainers = [{ name = "alshell7" }]
+keywords = ["mizan", "billing", "metering", "azeer", "cloudflare"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["build>=1.2", "mypy>=1.11", "twine>=5"]
+
+[project.urls]
+Homepage = "https://github.com/alshell7/mizan-client-sdks"
+Documentation = "https://github.com/alshell7/mizan-client-sdks/tree/main/mizan-python"
+Repository = "https://github.com/alshell7/mizan-client-sdks.git"
+Issues = "https://github.com/alshell7/mizan-client-sdks/issues"
+Changelog = "https://github.com/alshell7/mizan-client-sdks/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mizan = ["py.typed"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src"]
