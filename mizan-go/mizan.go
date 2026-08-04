@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-const Version = "1.3.0"
+const Version = "1.4.0"
 
 type ExactAmount string
 type Response map[string]any
@@ -339,13 +339,25 @@ type UsageMetadata struct {
 	Actor            map[string]string `json:"actor,omitempty"`
 	Channel          Channel           `json:"channel,omitempty"`
 	ChannelAccountID string            `json:"channel_account_id,omitempty"`
-	Provider         string            `json:"provider,omitempty"`
-	ProviderEventID  string            `json:"provider_event_id,omitempty"`
-	ConversationID   string            `json:"conversation_id,omitempty"`
-	CampaignID       string            `json:"campaign_id,omitempty"`
-	RawQuantity      string            `json:"raw_quantity,omitempty"`
-	BillableQuantity string            `json:"billable_quantity,omitempty"`
-	Attributes       map[string]any    `json:"attributes,omitempty"`
+	// Provider identifies the financial/tariff source. Feature-specific methods
+	// populate it from their required provider field (or Meta for Meta messages).
+	Provider string `json:"provider,omitempty"`
+	// ProviderEventID is the provider-side deduplication key for this feature.
+	ProviderEventID string `json:"provider_event_id,omitempty"`
+	ConversationID  string `json:"conversation_id,omitempty"`
+	CampaignID      string `json:"campaign_id,omitempty"`
+	// RawQuantity and BillableQuantity preserve provider normalization evidence.
+	RawQuantity      string `json:"raw_quantity,omitempty"`
+	BillableQuantity string `json:"billable_quantity,omitempty"`
+	// ProviderInvoiceID links the decision to a provider invoice/statement.
+	ProviderInvoiceID string `json:"provider_invoice_id,omitempty"`
+	// OriginalAmountMinor and OriginalCurrency record the pre-conversion amount.
+	OriginalAmountMinor ExactAmount `json:"original_amount_minor,omitempty"`
+	OriginalCurrency    string      `json:"original_currency,omitempty"`
+	// FXRule and TariffVersion identify the versioned financial rules applied.
+	FXRule        string         `json:"fx_rule,omitempty"`
+	TariffVersion string         `json:"tariff_version,omitempty"`
+	Attributes    map[string]any `json:"attributes,omitempty"`
 }
 
 type ConsumptionComponent struct {
@@ -425,6 +437,39 @@ type Client struct {
 	Logger      Logger
 }
 
+// DeliveryEndpointInput configures a ledger or notification receiver. Omit
+// AuthSecret to retain the current secret; responses never return the secret.
+type DeliveryEndpointInput struct {
+	EndpointURL     string `json:"endpoint_url"`
+	AuthType        string `json:"auth_type,omitempty"`
+	AuthSecret      string `json:"auth_secret,omitempty"`
+	ClearAuthSecret bool   `json:"clear_auth_secret,omitempty"`
+	Enabled         *bool  `json:"enabled,omitempty"`
+	Reason          string `json:"reason"`
+}
+
+// DeliveryEndpoint reports the effective endpoint and whether it came from a
+// business override or the global fallback.
+type DeliveryEndpoint struct {
+	Kind                 string `json:"kind"`
+	Scope                string `json:"scope"`
+	Source               string `json:"source"`
+	EndpointURL          string `json:"endpoint_url"`
+	AuthType             string `json:"auth_type"`
+	AuthSecretConfigured bool   `json:"auth_secret_configured"`
+	Enabled              bool   `json:"enabled"`
+	Revision             int    `json:"revision"`
+	UpdatedBy            string `json:"updated_by"`
+	Reason               string `json:"reason"`
+	UpdatedAt            string `json:"updated_at"`
+}
+
+type DeliveryConfigurationResult struct {
+	Scope     string              `json:"scope"`
+	Ready     bool                `json:"ready"`
+	Endpoints []*DeliveryEndpoint `json:"endpoints"`
+}
+
 func NewClient(baseURL, token string) (*Client, error) {
 	baseURL = strings.TrimRight(baseURL, "/")
 	if baseURL == "" || token == "" {
@@ -438,6 +483,80 @@ func NewClient(baseURL, token string) (*Client, error) {
 		return nil, fmt.Errorf("mizan: invalid base URL: %w", err)
 	}
 	return &Client{BaseURL: baseURL, Token: token, HTTPClient: &http.Client{Timeout: 10 * time.Second}, MaxAttempts: 3}, nil
+}
+
+// AdminClient uses a dedicated Admin Worker token for attributed control-plane operations.
+type AdminClient struct {
+	*Client
+	Actor string
+	Role  string
+}
+
+func NewAdminClient(baseURL, token, actor string) (*AdminClient, error) {
+	client, err := NewClient(baseURL, token)
+	if err != nil {
+		return nil, err
+	}
+	if actor == "" {
+		return nil, errors.New("mizan: admin actor is required")
+	}
+	return &AdminClient{Client: client, Actor: actor, Role: "billing_admin"}, nil
+}
+
+func (c *AdminClient) headers() (map[string]string, error) {
+	if c.Actor == "" {
+		return nil, errors.New("mizan: admin actor is required")
+	}
+	if c.Role != "billing_admin" && c.Role != "finance_admin" && c.Role != "support_admin" {
+		return nil, errors.New("mizan: admin role must be billing_admin, finance_admin, or support_admin")
+	}
+	return map[string]string{"X-Admin-Actor": c.Actor, "X-Admin-Role": c.Role}, nil
+}
+
+func (c *AdminClient) GetGlobalDeliveryEndpoints(ctx context.Context) (Response, error) {
+	headers, err := c.headers()
+	if err != nil {
+		return nil, err
+	}
+	return c.requestWithHeaders(ctx, http.MethodGet, "/admin/api/delivery-endpoints", "", nil, "", false, headers)
+}
+
+func (c *AdminClient) ConfigureGlobalDeliveryEndpoint(ctx context.Context, kind string, in DeliveryEndpointInput, idempotencyKey string) (Response, error) {
+	if kind != "ledger" && kind != "notification" {
+		return nil, errors.New("mizan: delivery kind must be ledger or notification")
+	}
+	headers, err := c.headers()
+	if err != nil {
+		return nil, err
+	}
+	if idempotencyKey == "" {
+		idempotencyKey = newID()
+	}
+	return c.requestWithHeaders(ctx, http.MethodPut, "/admin/api/delivery-endpoints/"+kind, "", in, idempotencyKey, true, headers)
+}
+
+func (c *AdminClient) GetBusinessDeliveryEndpoints(ctx context.Context, businessID string) (Response, error) {
+	headers, err := c.headers()
+	if err != nil {
+		return nil, err
+	}
+	path := "/admin/api/businesses/" + url.PathEscape(businessID) + "/delivery-endpoints"
+	return c.requestWithHeaders(ctx, http.MethodGet, path, businessID, nil, "", false, headers)
+}
+
+func (c *AdminClient) ConfigureBusinessDeliveryEndpoint(ctx context.Context, businessID, kind string, in DeliveryEndpointInput, idempotencyKey string) (Response, error) {
+	if kind != "ledger" && kind != "notification" {
+		return nil, errors.New("mizan: delivery kind must be ledger or notification")
+	}
+	headers, err := c.headers()
+	if err != nil {
+		return nil, err
+	}
+	if idempotencyKey == "" {
+		idempotencyKey = newID()
+	}
+	path := "/admin/api/businesses/" + url.PathEscape(businessID) + "/delivery-endpoints/" + kind
+	return c.requestWithHeaders(ctx, http.MethodPut, path, businessID, in, idempotencyKey, true, headers)
 }
 
 func (c *Client) ActivateSubscription(ctx context.Context, businessID string, in ActivationRequest, idempotencyKey string) (Response, error) {
@@ -497,6 +616,10 @@ func (c *Client) mutate(ctx context.Context, method, path, businessID string, in
 }
 
 func (c *Client) request(ctx context.Context, method, path, businessID string, in any, key string, mutation bool) (Response, error) {
+	return c.requestWithHeaders(ctx, method, path, businessID, in, key, mutation, nil)
+}
+
+func (c *Client) requestWithHeaders(ctx context.Context, method, path, businessID string, in any, key string, mutation bool, extraHeaders map[string]string) (Response, error) {
 	var payload []byte
 	var err error
 	if in != nil {
@@ -531,6 +654,9 @@ func (c *Client) request(ctx context.Context, method, path, businessID string, i
 		}
 		if key != "" {
 			req.Header.Set("Idempotency-Key", key)
+		}
+		for name, value := range extraHeaders {
+			req.Header.Set(name, value)
 		}
 		resp, sendErr := client.Do(req)
 		if sendErr != nil {

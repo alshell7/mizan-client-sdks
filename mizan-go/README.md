@@ -48,10 +48,10 @@ Your service supplies facts, such as a confirmed payment or completed billable a
 ## Install
 
 ```bash
-go get github.com/alshell7/mizan-client-sdks/mizan-go@v1.3.0
+go get github.com/alshell7/mizan-client-sdks/mizan-go@v1.4.0
 ```
 
-The module is stored in a repository subdirectory, so repository release tags use `mizan-go/v1.3.0`.
+The module is stored in a repository subdirectory, so repository release tags use `mizan-go/v1.4.0`.
 
 Import it with:
 
@@ -380,21 +380,17 @@ Eligibility expires quickly and does not reserve funds. Always call `Consume` wh
 
 ## Scenario 5: record usage
 
-### One feature
+### One feature: use the feature method
 
 ```go
 sourceEventID := "message-delivered-001"
 
-response, err := client.Consume(ctx, businessID, mizan.ConsumptionRequest{
+response, err := client.ConsumeOutboundDeliveredMessage(ctx, businessID, mizan.OutboundDeliveredMessageUsage{
 	SourceEventID: sourceEventID,
 	OccurredAt:    time.Now().UTC(),
-	FeatureCode:   mizan.FeatureOutboundDeliveredMessage,
-	Quantity:      "1",
 	Metadata: &mizan.UsageMetadata{
-		Channel:         mizan.ChannelWhatsApp,
-		Provider:        "meta",
-		ProviderEventID: "meta-message-001",
-		ConversationID:  "conversation-123",
+		Channel:        mizan.ChannelWhatsApp,
+		ConversationID: "conversation-123",
 	},
 }, "consume:"+sourceEventID)
 if err != nil {
@@ -412,6 +408,102 @@ fmt.Println(decision.Balances.AzeerUnitMillis)
 ```
 
 Derive `SourceEventID` from your own durable event. It adds domain-level deduplication in addition to the HTTP idempotency key.
+
+### Contract for every feature code
+
+Each feature has its own exported Go struct and canonical method. There is no shared public count/provider input
+that can accidentally be sent to the wrong feature.
+
+| Feature code | Exported input struct | Canonical method | Billable input |
+|---|---|---|---|
+| `conversation_24h` | `Conversation24HUsage` | `ConsumeConversation24H` | `Quantity`, default `"1"` window |
+| `outbound_delivered_message` | `OutboundDeliveredMessageUsage` | `ConsumeOutboundDeliveredMessage` | `Quantity`, default `"1"` delivered message |
+| `ai_assist_action_over_allowance` | `AIAssistActionOverAllowanceUsage` | `ConsumeAIAssistActionOverAllowance` | `Quantity`, default `"1"` over-allowance action |
+| `voice_ai_started_minute` | `VoiceAIStartedMinuteUsage` | `ConsumeVoiceAIStartedMinute` | Required positive raw `DurationSeconds`; Mizan rounds up |
+| `ai_reply_handling` | `AIReplyHandlingUsage` | `ConsumeAIReplyHandling` | `Quantity`, default `"1"`; currently included |
+| `whatsapp_meta_marketing_msg` | `WhatsAppMetaMarketingMessageUsage` | `ConsumeWhatsAppMetaMarketingMessage` | Meta `ProviderEventID`; `Quantity` defaults to `"1"` |
+| `telephony_voice_minute` | `TelephonyVoiceMinuteUsage` | `ConsumeTelephonyVoiceMinute` | Provider-normalized `BillableMinutes`, default `"1"` |
+| `inbound_voice_minute` | `InboundVoiceMinuteUsage` | `ConsumeInboundVoiceMinute` | Provider-normalized `BillableMinutes`, default `"1"`; currently zero-rated |
+| `other_provider_charge` | `OtherProviderChargeUsage` | `ConsumeOtherProviderCharge` | Exact `ProviderAmountMinor` in halala; zero is valid |
+
+The inputs intentionally differ:
+
+```go
+// The caller must first establish that the included AI allowance is exhausted.
+_, err = client.ConsumeAIAssistActionOverAllowance(ctx, businessID, mizan.AIAssistActionOverAllowanceUsage{
+	SourceEventID: "assist-overage-001",
+	OccurredAt:    time.Now().UTC(),
+	// Quantity omitted: exactly one action.
+}, "consume:assist-overage-001")
+
+// Raw seconds. Do not pre-round: Mizan charges 61 seconds as 2 started minutes.
+_, err = client.ConsumeVoiceAIStartedMinute(ctx, businessID, mizan.VoiceAIStartedMinuteUsage{
+	SourceEventID: "call-ai-001", OccurredAt: time.Now().UTC(), DurationSeconds: "61",
+}, "consume:call-ai-001")
+
+// Provider is fixed to Meta; ProviderEventID is its deduplication boundary.
+_, err = client.ConsumeWhatsAppMetaMarketingMessage(ctx, businessID, mizan.WhatsAppMetaMarketingMessageUsage{
+	SourceEventID: "marketing-message-001", OccurredAt: time.Now().UTC(),
+	ProviderEventID: "wamid.HBgMNTU...",
+}, "consume:marketing-message-001")
+
+// Provider-normalized tariff minutes, never raw call seconds.
+_, err = client.ConsumeTelephonyVoiceMinute(ctx, businessID, mizan.TelephonyVoiceMinuteUsage{
+	SourceEventID: "call-provider-001", OccurredAt: time.Now().UTC(),
+	Provider: "Twilio", ProviderEventID: "CA123", BillableMinutes: "1.5",
+	Metadata: &mizan.UsageMetadata{RawQuantity: "83", BillableQuantity: "1.5", TariffVersion: "voice-v4"},
+}, "consume:call-provider-001")
+
+// Inbound events still require provider attribution even when the catalog tariff is zero-rated.
+_, err = client.ConsumeInboundVoiceMinute(ctx, businessID, mizan.InboundVoiceMinuteUsage{
+	SourceEventID: "inbound-call-001", OccurredAt: time.Now().UTC(),
+	Provider: "Carrier", ProviderEventID: "INBOUND-123",
+}, "consume:inbound-call-001")
+
+// Exact pass-through settlement amount in halala. Never derive it with float64.
+_, err = client.ConsumeOtherProviderCharge(ctx, businessID, mizan.OtherProviderChargeUsage{
+	SourceEventID: "provider-fee-001", OccurredAt: time.Now().UTC(),
+	Provider: "Carrier", ProviderEventID: "invoice-line-123", ProviderAmountMinor: "337",
+	Metadata: &mizan.UsageMetadata{ProviderInvoiceID: "INV-2026-08", TariffVersion: "carrier-v4"},
+}, "consume:provider-fee-001")
+```
+
+The SDK rejects invalid exact quantities, missing events/timestamps, missing provider attribution, unsupported
+metadata, and signed-int64 overflow before issuing HTTP. The Worker remains authoritative for prices, balances,
+plan overrides, fair use, and duplicate decisions.
+
+Provider-specific structs require `Provider`/`ProviderEventID` where applicable. Explicit struct fields override
+conflicting values in optional `UsageMetadata`; the Meta contract always records `Provider: "Meta"`.
+
+| `UsageMetadata` field | Meaning |
+|---|---|
+| `Provider` | Financial/tariff source; fixed to Meta for `whatsapp_meta_marketing_msg` |
+| `ProviderEventID` | Mandatory provider-side deduplication key for the feature |
+| `ProviderInvoiceID` | Invoice or statement reference used for reconciliation |
+| `RawQuantity` | Original provider measurement, such as call seconds |
+| `BillableQuantity` | Provider-normalized tariff quantity sent as `quantity` |
+| `OriginalAmountMinor` / `OriginalCurrency` | Exact pre-conversion provider amount and ISO currency |
+| `FXRule` | Versioned conversion rule when settlement required currency conversion |
+| `TariffVersion` | Provider tariff revision used to normalize the charge |
+
+Never store provider credentials, signatures, or complete webhook payloads in metadata.
+
+Every successful HTTP response is an envelope with `api_version`, `catalog_version`, `policy_version`, and
+`data`. `DecodeData[mizan.ConsumptionResult]` exposes:
+
+| Field | Meaning |
+|---|---|
+| `Accepted` / `Code` | Authoritative atomic outcome and stable decision code (`ACCEPTED` on success) |
+| `SourceEventID` | Your durable event identifier echoed for reconciliation |
+| `LedgerEntryID` | Immutable ledger entry created for the decision |
+| `BusinessSequence` | Monotonic per-business ordering key for downstream replication |
+| `Charges` | Per-component rail, exact quantity/unit/money amounts, and provider treatment |
+| `AllocationsByFeature` | Azeer credit lots consumed by each feature; empty for non-unit rails |
+| `Totals` | Exact aggregate Azeer milliunits and provider halala debited by the event |
+| `Balances` | Remaining Azeer and provider balances after commit |
+| `Details` | Machine-readable safeguards or rejection context; do not parse the human message |
+
+`ExactAmount` remains a decimal string. A returned HTTP response is authoritative; eligibility is only a preview.
 
 ### Multiple components
 
@@ -431,11 +523,10 @@ response, err := client.Consume(ctx, businessID, mizan.ConsumptionRequest{
 			},
 		},
 		{
-			FeatureCode:         mizan.FeatureWhatsAppMetaMarketingMessage,
-			Quantity:            "1",
-			ProviderAmountMinor: mizan.ExactAmount("25"),
+			FeatureCode: mizan.FeatureWhatsAppMetaMarketingMessage,
 			Metadata: &mizan.UsageMetadata{
 				Channel:         mizan.ChannelWhatsApp,
+				Provider:        "Meta",
 				ProviderEventID: "meta-charge-001",
 			},
 		},
@@ -454,6 +545,32 @@ flowchart TD
 ```
 
 Metadata is for traceability and deduplication. Do not store secrets or unrestricted provider payloads in it.
+
+### Configure delivery with the admin client
+
+```go
+admin, err := mizan.NewAdminClient(
+	"https://mizan-admin.example.com",
+	os.Getenv("MIZAN_ADMIN_TOKEN"),
+	"ops@example.com",
+)
+if err != nil { return err }
+
+enabled := true
+_, err = admin.ConfigureGlobalDeliveryEndpoint(ctx, "ledger", mizan.DeliveryEndpointInput{
+	EndpointURL: "https://ledger.example.com/mizan",
+	AuthType: "bearer",
+	AuthSecret: os.Getenv("MIZAN_LEDGER_SECRET"), // Write-only.
+	Enabled: &enabled,
+	Reason: "Production ledger receiver",
+}, "global-ledger-2026-08-04")
+```
+
+Business endpoint records override global fallbacks. An explicitly disabled business record suppresses fallback; fallback occurs only when the record is absent.
+
+Delivery reads decode into `DeliveryConfigurationResult`: `Scope` identifies the requested storage scope,
+`Ready` means both effective endpoint kinds are enabled, and each endpoint reports its effective `Source`, URL,
+auth mode, enabled state, revision, attribution, and `AuthSecretConfigured`. The secret is write-only.
 
 ## Scenario 6: top-ups and refunds
 

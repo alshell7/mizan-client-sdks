@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -253,5 +254,244 @@ func TestCustomPlanActivationJSONUsesConfigurationID(t *testing.T) {
 	}
 	if _, exists := decoded["plan_id"]; exists {
 		t.Fatalf("empty template plan should not be serialized: %s", body)
+	}
+}
+
+func TestFeatureSpecificConsumptionContracts(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies = append(bodies, body)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"data":{"accepted":true}}`))
+	}))
+	defer server.Close()
+	client, _ := NewClient(server.URL, "secret")
+	now := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+	if _, err := client.ConsumeConversation24H(context.Background(), "business-1", Conversation24HUsage{
+		SourceEventID: "conversation-1", OccurredAt: now,
+	}, "conversation-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ConsumeOutboundDeliveredMessage(context.Background(), "business-1", OutboundDeliveredMessageUsage{
+		SourceEventID: "msg-1", OccurredAt: now,
+	}, "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ConsumeAIAssistActionOverAllowance(context.Background(), "business-1", AIAssistActionOverAllowanceUsage{
+		SourceEventID: "assist-1", OccurredAt: now,
+	}, "assist-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ConsumeVoiceAIStartedMinute(context.Background(), "business-1", VoiceAIStartedMinuteUsage{
+		SourceEventID: "voice-ai-1", OccurredAt: now, DurationSeconds: "61",
+	}, "voice-ai-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ConsumeAIReplyHandling(context.Background(), "business-1", AIReplyHandlingUsage{
+		SourceEventID: "reply-1", OccurredAt: now,
+	}, "reply-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ConsumeWhatsAppMetaMarketingMessage(context.Background(), "business-1", WhatsAppMetaMarketingMessageUsage{
+		SourceEventID: "wamid-1", OccurredAt: now, ProviderEventID: "wamid.1",
+		Metadata: &UsageMetadata{Provider: "wrong", ProviderEventID: "wrong"},
+	}, "wamid-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ConsumeTelephonyVoiceMinute(context.Background(), "business-1", TelephonyVoiceMinuteUsage{
+		SourceEventID: "call-1", OccurredAt: now, Provider: "Twilio", ProviderEventID: "CA1",
+	}, "call-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ConsumeInboundVoiceMinute(context.Background(), "business-1", InboundVoiceMinuteUsage{
+		SourceEventID: "inbound-1", OccurredAt: now, Provider: "Carrier", ProviderEventID: "IN1",
+		BillableMinutes: "1.250",
+	}, "inbound-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ConsumeOtherProviderCharge(context.Background(), "business-1", OtherProviderChargeUsage{
+		SourceEventID: "fee-1", OccurredAt: now, Provider: "Carrier", ProviderEventID: "INV1",
+		ProviderAmountMinor: "0",
+	}, "fee-1"); err != nil {
+		t.Fatal(err)
+	}
+	wantFeatures := AllFeatureCodes()
+	wantCodes := make([]string, len(wantFeatures))
+	for index, feature := range wantFeatures {
+		wantCodes[index] = string(feature)
+	}
+	if len(bodies) != len(wantCodes) {
+		t.Fatalf("got %d requests, want %d", len(bodies), len(wantCodes))
+	}
+	for index, code := range wantCodes {
+		if bodies[index]["feature_code"] != code {
+			t.Fatalf("request %d feature = %#v, want %s", index, bodies[index]["feature_code"], code)
+		}
+	}
+	for _, index := range []int{0, 1, 2, 4, 5, 6} {
+		if bodies[index]["quantity"] != "1" {
+			t.Fatalf("request %d quantity did not default to one: %#v", index, bodies[index])
+		}
+	}
+	if bodies[3]["duration_seconds"] != "61" || bodies[3]["quantity"] != nil {
+		t.Fatalf("started-minute wire contract drifted: %#v", bodies[3])
+	}
+	if bodies[7]["quantity"] != "1.250" {
+		t.Fatalf("provider-normalized minutes drifted: %#v", bodies[7])
+	}
+	if bodies[8]["provider_amount_minor"] != "0" || bodies[8]["quantity"] != nil {
+		t.Fatalf("provider amount wire contract drifted: %#v", bodies[8])
+	}
+	metadata := bodies[5]["metadata"].(map[string]any)
+	if metadata["provider"] != "Meta" || metadata["provider_event_id"] != "wamid.1" {
+		t.Fatalf("provider attribution missing: %#v", metadata)
+	}
+}
+
+func TestFeatureSpecificConsumptionRejectsInvalidInputsBeforeHTTP(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"data":{"accepted":true}}`))
+	}))
+	defer server.Close()
+	client, _ := NewClient(server.URL, "secret")
+	ctx := context.Background()
+	now := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"zero count", func() error {
+			_, err := client.ConsumeConversation24H(ctx, "business-1", Conversation24HUsage{SourceEventID: "x", OccurredAt: now, Quantity: "0"}, "x")
+			return err
+		}},
+		{"too precise", func() error {
+			_, err := client.ConsumeOutboundDeliveredMessage(ctx, "business-1", OutboundDeliveredMessageUsage{SourceEventID: "x", OccurredAt: now, Quantity: "1.0001"}, "x")
+			return err
+		}},
+		{"missing source", func() error {
+			_, err := client.ConsumeAIReplyHandling(ctx, "business-1", AIReplyHandlingUsage{OccurredAt: now}, "x")
+			return err
+		}},
+		{"missing time", func() error {
+			_, err := client.ConsumeAIAssistActionOverAllowance(ctx, "business-1", AIAssistActionOverAllowanceUsage{SourceEventID: "x"}, "x")
+			return err
+		}},
+		{"zero duration", func() error {
+			_, err := client.ConsumeVoiceAIStartedMinute(ctx, "business-1", VoiceAIStartedMinuteUsage{SourceEventID: "x", OccurredAt: now, DurationSeconds: "0"}, "x")
+			return err
+		}},
+		{"fractional duration", func() error {
+			_, err := client.ConsumeVoiceAIStartedMinute(ctx, "business-1", VoiceAIStartedMinuteUsage{SourceEventID: "x", OccurredAt: now, DurationSeconds: "1.5"}, "x")
+			return err
+		}},
+		{"missing meta event", func() error {
+			_, err := client.ConsumeWhatsAppMetaMarketingMessage(ctx, "business-1", WhatsAppMetaMarketingMessageUsage{SourceEventID: "x", OccurredAt: now}, "x")
+			return err
+		}},
+		{"missing carrier", func() error {
+			_, err := client.ConsumeTelephonyVoiceMinute(ctx, "business-1", TelephonyVoiceMinuteUsage{SourceEventID: "x", OccurredAt: now, ProviderEventID: "call"}, "x")
+			return err
+		}},
+		{"negative provider amount", func() error {
+			_, err := client.ConsumeOtherProviderCharge(ctx, "business-1", OtherProviderChargeUsage{SourceEventID: "x", OccurredAt: now, Provider: "carrier", ProviderEventID: "fee", ProviderAmountMinor: "-1"}, "x")
+			return err
+		}},
+		{"overflow provider amount", func() error {
+			_, err := client.ConsumeOtherProviderCharge(ctx, "business-1", OtherProviderChargeUsage{SourceEventID: "x", OccurredAt: now, Provider: "carrier", ProviderEventID: "fee", ProviderAmountMinor: "9223372036854775808"}, "x")
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.call(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+	if requests != 0 {
+		t.Fatalf("invalid contracts issued %d HTTP requests", requests)
+	}
+}
+
+func TestFeatureExactBoundariesMatchWorkerContract(t *testing.T) {
+	for _, quantity := range []ExactAmount{"0.001", "1", "9223372036854775.807"} {
+		if err := validateQuantity(quantity); err != nil {
+			t.Fatalf("valid quantity %s rejected: %v", quantity, err)
+		}
+	}
+	for _, quantity := range []ExactAmount{"0", "-1", "1.0001", "9223372036854775.808"} {
+		if err := validateQuantity(quantity); err == nil {
+			t.Fatalf("invalid quantity %s accepted", quantity)
+		}
+	}
+	if err := validateExactInteger("9223372036854775807", "amount", true); err != nil {
+		t.Fatalf("maximum exact amount rejected: %v", err)
+	}
+	if err := validateExactInteger("9223372036854775808", "amount", true); err == nil {
+		t.Fatal("overflowing exact amount accepted")
+	}
+}
+
+func TestFeatureREADMEReferencesRealContractsAndMethods(t *testing.T) {
+	contents, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := string(contents)
+	rows := [][]string{
+		{"conversation_24h", "Conversation24HUsage", "ConsumeConversation24H"},
+		{"outbound_delivered_message", "OutboundDeliveredMessageUsage", "ConsumeOutboundDeliveredMessage"},
+		{"ai_assist_action_over_allowance", "AIAssistActionOverAllowanceUsage", "ConsumeAIAssistActionOverAllowance"},
+		{"voice_ai_started_minute", "VoiceAIStartedMinuteUsage", "ConsumeVoiceAIStartedMinute"},
+		{"ai_reply_handling", "AIReplyHandlingUsage", "ConsumeAIReplyHandling"},
+		{"whatsapp_meta_marketing_msg", "WhatsAppMetaMarketingMessageUsage", "ConsumeWhatsAppMetaMarketingMessage"},
+		{"telephony_voice_minute", "TelephonyVoiceMinuteUsage", "ConsumeTelephonyVoiceMinute"},
+		{"inbound_voice_minute", "InboundVoiceMinuteUsage", "ConsumeInboundVoiceMinute"},
+		{"other_provider_charge", "OtherProviderChargeUsage", "ConsumeOtherProviderCharge"},
+	}
+	for _, row := range rows {
+		for _, symbol := range row {
+			if !strings.Contains(readme, "`"+symbol+"`") {
+				t.Fatalf("README does not document %s for %s", symbol, row[0])
+			}
+		}
+	}
+	_ = []any{Conversation24HUsage{}, OutboundDeliveredMessageUsage{}, AIAssistActionOverAllowanceUsage{},
+		VoiceAIStartedMinuteUsage{}, AIReplyHandlingUsage{}, WhatsAppMetaMarketingMessageUsage{},
+		TelephonyVoiceMinuteUsage{}, InboundVoiceMinuteUsage{}, OtherProviderChargeUsage{}}
+	_ = []any{(*Client).ConsumeConversation24H, (*Client).ConsumeOutboundDeliveredMessage,
+		(*Client).ConsumeAIAssistActionOverAllowance, (*Client).ConsumeVoiceAIStartedMinute,
+		(*Client).ConsumeAIReplyHandling, (*Client).ConsumeWhatsAppMetaMarketingMessage,
+		(*Client).ConsumeTelephonyVoiceMinute, (*Client).ConsumeInboundVoiceMinute,
+		(*Client).ConsumeOtherProviderCharge}
+}
+
+func TestAdminClientDeliveryConfiguration(t *testing.T) {
+	var path, actor, key string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, actor, key = r.URL.Path, r.Header.Get("X-Admin-Actor"), r.Header.Get("Idempotency-Key")
+		_, _ = w.Write([]byte(`{"data":{"ready":true,"endpoints":[]}}`))
+	}))
+	defer server.Close()
+	client, err := NewAdminClient(server.URL, "admin-secret", "ops@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	_, err = client.ConfigureGlobalDeliveryEndpoint(context.Background(), "ledger", DeliveryEndpointInput{
+		EndpointURL: "https://ledger.example/events", AuthType: "none", Enabled: &enabled,
+		Reason: "Production ledger receiver",
+	}, "global-ledger-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/admin/api/delivery-endpoints/ledger" || actor != "ops@example.com" || key != "global-ledger-v1" {
+		t.Fatalf("unexpected admin request path=%q actor=%q key=%q", path, actor, key)
 	}
 }

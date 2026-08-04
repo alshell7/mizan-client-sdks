@@ -410,31 +410,24 @@ Eligibility expires quickly and reserves nothing. Always call `consume` when the
 
 ## Scenario 5: record usage
 
-### One feature
+### One feature: use the feature method
 
 ```python
 from datetime import datetime, timezone
 
-from mizan import Channel, ConsumptionRequest, FeatureCode
+from mizan import Channel
 
 source_event_id = "message-delivered-001"
 
-usage: ConsumptionRequest = {
-    "source_event_id": source_event_id,
-    "occurred_at": datetime.now(timezone.utc).isoformat(),
-    "feature_code": FeatureCode.OUTBOUND_DELIVERED_MESSAGE,
-    "quantity": "1",
-    "metadata": {
+decision = client.consume_outbound_delivered_message(
+    business_id,
+    source_event_id=source_event_id,
+    occurred_at=datetime.now(timezone.utc).isoformat(),
+    # quantity is optional and defaults to "1".
+    metadata={
         "channel": Channel.WHATSAPP,
-        "provider": "meta",
-        "provider_event_id": "meta-message-001",
         "conversation_id": "conversation-123",
     },
-}
-
-decision = client.consume(
-    business_id,
-    usage,
     idempotency_key=f"consume:{source_event_id}",
 )
 
@@ -445,11 +438,140 @@ print(decision["data"]["balances"])
 
 Choose `source_event_id` from the event in your own system. It is a second deduplication boundary in addition to the HTTP idempotency key.
 
+### Contract for every feature code
+
+Every feature has an exported `TypedDict`, a validated builder, and a canonical client method. The request
+types describe the actual JSON sent to Mizan; they are not documentation-only aliases.
+
+| Feature code | Exported request contract | Builder | Canonical client method | Billable input |
+|---|---|---|---|---|
+| `conversation_24h` | `Conversation24HConsumptionRequest` | `conversation_24h` | `consume_conversation_24h` | Window quantity, default `"1"` |
+| `outbound_delivered_message` | `OutboundDeliveredMessageConsumptionRequest` | `outbound_delivered_message` | `consume_outbound_delivered_message` | Delivered-message quantity, default `"1"` |
+| `ai_assist_action_over_allowance` | `AIAssistActionOverAllowanceConsumptionRequest` | `ai_assist_action_over_allowance` | `consume_ai_assist_action_over_allowance` | Over-allowance action quantity, default `"1"` |
+| `voice_ai_started_minute` | `VoiceAIStartedMinuteConsumptionRequest` | `voice_ai_started_minute` | `consume_voice_ai_started_minute` | Required positive raw `duration_seconds`; Mizan rounds up |
+| `ai_reply_handling` | `AIReplyHandlingConsumptionRequest` | `ai_reply_handling` | `consume_ai_reply_handling` | Included reply quantity, default `"1"` |
+| `whatsapp_meta_marketing_msg` | `WhatsAppMetaMarketingMessageConsumptionRequest` | `whatsapp_meta_marketing_message` | `consume_whatsapp_meta_marketing_message` | Meta event ID and message quantity, default `"1"`; provider is fixed to `Meta` |
+| `telephony_voice_minute` | `TelephonyVoiceMinuteConsumptionRequest` | `telephony_voice_minute` | `consume_telephony_voice_minute` | Provider-normalized billable minutes, default `"1"` |
+| `inbound_voice_minute` | `InboundVoiceMinuteConsumptionRequest` | `inbound_voice_minute` | `consume_inbound_voice_minute` | Provider-normalized inbound minutes, default `"1"`; currently zero-rated |
+| `other_provider_charge` | `OtherProviderChargeConsumptionRequest` | `other_provider_charge` | `consume_other_provider_charge` | Required exact provider settlement amount in halala; zero is valid |
+
+Builders are useful when an application queues or signs the JSON before sending it:
+
+```python
+from mizan import Conversation24HConsumptionRequest, conversation_24h
+
+usage: Conversation24HConsumptionRequest = conversation_24h(
+    source_event_id="conversation-window-001",
+    occurred_at=datetime.now(timezone.utc).isoformat(),
+    # quantity omitted: exactly one conversation window.
+)
+client.consume(business_id, usage, idempotency_key="consume:conversation-window-001")
+```
+
+The canonical methods expose each feature's real input instead of a universal quantity object:
+
+```python
+# The caller must establish that the included AI allowance is exhausted.
+client.consume_ai_assist_action_over_allowance(
+    business_id,
+    source_event_id="assist-overage-001",
+    occurred_at=datetime.now(timezone.utc).isoformat(),
+    # quantity defaults to "1".
+)
+
+# Raw seconds are required. Do not pre-round: 61 seconds becomes 2 started minutes in Mizan.
+client.consume_voice_ai_started_minute(
+    business_id,
+    source_event_id="call-ai-001",
+    occurred_at=datetime.now(timezone.utc).isoformat(),
+    duration_seconds="61",
+)
+
+# Meta is fixed by this contract. The provider event ID is mandatory for deduplication.
+client.consume_whatsapp_meta_marketing_message(
+    business_id,
+    source_event_id="marketing-message-001",
+    occurred_at=datetime.now(timezone.utc).isoformat(),
+    provider_event_id="wamid.HBgMNTU...",
+)
+
+# Provider-normalized tariff minutes, not raw call duration.
+client.consume_telephony_voice_minute(
+    business_id,
+    source_event_id="call-provider-001",
+    occurred_at=datetime.now(timezone.utc).isoformat(),
+    provider="Twilio",
+    provider_event_id="CA123",
+    billable_minutes="1.5",
+    metadata={"raw_quantity": "83", "billable_quantity": "1.5", "tariff_version": "voice-v4"},
+)
+
+# Inbound minutes use the same provider dedupe requirements even when the current tariff is zero-rated.
+client.consume_inbound_voice_minute(
+    business_id,
+    source_event_id="inbound-call-001",
+    occurred_at=datetime.now(timezone.utc).isoformat(),
+    provider="Carrier",
+    provider_event_id="INBOUND-123",
+)
+
+# Exact pass-through settlement amount in halala. Never calculate this with float.
+client.consume_other_provider_charge(
+    business_id,
+    source_event_id="provider-fee-001",
+    occurred_at=datetime.now(timezone.utc).isoformat(),
+    provider="Carrier",
+    provider_event_id="invoice-line-123",
+    provider_amount_minor="337",
+    metadata={"provider_invoice_id": "INV-2026-08", "tariff_version": "carrier-v4"},
+)
+```
+
+Builders reject malformed exact quantities, missing/timezone-less timestamps, missing provider attribution,
+unsupported metadata, and signed-int64 overflow before the client makes an HTTP request. The Worker remains
+authoritative for catalog prices, balances, plan overrides, fair use, and duplicate decisions.
+
+Provider builders return a request whose `metadata` satisfies exported `ProviderUsageMetadata`. Explicit
+`provider` and `provider_event_id` arguments override any conflicting optional metadata so financial attribution
+cannot drift.
+
+| Provider metadata field | Meaning |
+|---|---|
+| `provider` | Financial/tariff source; fixed to `Meta` for `whatsapp_meta_marketing_msg` |
+| `provider_event_id` | Mandatory provider-side deduplication key for the feature |
+| `provider_invoice_id` | Invoice or statement reference used for reconciliation |
+| `raw_quantity` | Original provider measurement, such as call seconds |
+| `billable_quantity` | Provider-normalized tariff quantity sent as `quantity` |
+| `original_amount_minor` / `original_currency` | Exact pre-conversion provider amount and ISO currency |
+| `fx_rule` | Versioned conversion rule when settlement required currency conversion |
+| `tariff_version` | Provider tariff revision used to calculate/normalize the charge |
+
+Never store provider credentials, signatures, or complete webhook payloads in metadata.
+
+Every successful HTTP response is an envelope with `api_version`, `catalog_version`, `policy_version`, and
+`data`. For a consumption decision, `data` contains:
+
+| Field | Meaning |
+|---|---|
+| `accepted` / `code` | Authoritative atomic outcome and stable decision code (`ACCEPTED` on success) |
+| `source_event_id` | Your durable event identifier echoed for reconciliation |
+| `ledger_entry_id` | Immutable ledger entry created for the decision |
+| `business_sequence` | Monotonic per-business ordering key for downstream replication |
+| `charges[]` | Per-component `rail`, exact `quantity_millis`, `unit_millis`, `money_minor`, and provider `treatment` |
+| `allocations_by_feature[]` | Azeer credit lots consumed by each feature; empty for non-unit rails |
+| `totals` | Exact aggregate `azeer_unit_millis` and `provider_money_minor` debited by the event |
+| `balances` | Remaining `azeer_unit_millis` and `provider_balance_minor` after commit |
+| `details` | Machine-readable safeguards or rejection context; do not parse the human message |
+
+Amounts remain decimal strings. A returned HTTP response is authoritative; eligibility is only a preview.
+
 ### Multiple components in one event
 
 Use components when a single product event creates several related charges. Mizan accepts or rejects all components together.
 
 ```python
+from mizan import ConsumptionRequest, FeatureCode
+
 multi_component: ConsumptionRequest = {
     "source_event_id": "campaign-delivery-001",
     "occurred_at": datetime.now(timezone.utc).isoformat(),
@@ -464,10 +586,9 @@ multi_component: ConsumptionRequest = {
         },
         {
             "feature_code": FeatureCode.WHATSAPP_META_MARKETING_MSG,
-            "quantity": "1",
-            "provider_amount_minor": "25",
             "metadata": {
                 "channel": Channel.WHATSAPP,
+                "provider": "Meta",
                 "provider_event_id": "meta-charge-001",
             },
         },
@@ -492,6 +613,39 @@ flowchart TD
 ```
 
 Metadata is for traceability and deduplication. Use enum-backed `channel` values and stable provider event IDs. Do not place secrets or unrestricted payloads in metadata.
+
+### Configure delivery fallbacks with an admin credential
+
+```python
+from mizan import MizanAdminClient
+
+admin = MizanAdminClient(
+    "https://mizan-admin.example.com",
+    admin_token,
+    actor="ops@example.com",
+)
+
+admin.configure_global_delivery_endpoint(
+    "ledger",
+    {
+        "endpoint_url": "https://ledger.example.com/mizan",
+        "auth_type": "bearer",
+        "auth_secret": ledger_secret,  # Write-only; responses expose only a boolean.
+        "enabled": True,
+        "reason": "Production ledger receiver",
+    },
+    idempotency_key="global-ledger-2026-08-04",
+)
+
+effective = admin.get_business_delivery_endpoints("business-123")
+# effective["data"]["endpoints"][0]["source"] is "business" or "global".
+```
+
+An explicit business endpoint always wins. An explicit disabled business endpoint intentionally suppresses the global fallback; fallback occurs only when the business record is absent.
+
+Delivery reads return `scope`, `ready`, and two `endpoints` slots (`ledger`, `notification`). Each configured
+endpoint reports `source` (`business` or `global`), its URL/auth mode, enabled state, revision, attribution, and
+`auth_secret_configured`. The secret itself is write-only and is never returned.
 
 ## Scenario 6: top-ups and refunds
 

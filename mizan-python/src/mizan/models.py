@@ -111,17 +111,46 @@ class BudgetRequest(_BudgetOptional):
     action: BudgetAction
 
 
-class UsageMetadata(TypedDict, total=False):
+class _CommonUsageMetadata(TypedDict, total=False):
     actor: dict[str, str]
     channel: Channel
     channel_account_id: str
-    provider: str
-    provider_event_id: str
     conversation_id: str
     campaign_id: str
     raw_quantity: str
     billable_quantity: str
+    provider_invoice_id: str
+    original_amount_minor: ExactAmount
+    original_currency: str
+    fx_rule: str
+    tariff_version: str
     attributes: dict[str, str | int | float | bool | None]
+
+
+class _OptionalProviderAttribution(TypedDict, total=False):
+    provider: str
+    provider_event_id: str
+
+
+class _RequiredProviderAttribution(TypedDict):
+    provider: str
+    provider_event_id: str
+
+
+class UsageMetadata(_CommonUsageMetadata, _OptionalProviderAttribution):
+    """Optional application attribution persisted with a usage decision.
+
+    ``attributes`` accepts at most 32 small scalar facts. Do not include secrets
+    or unrestricted provider payloads.
+    """
+
+
+class ProviderUsageMetadata(_CommonUsageMetadata, _RequiredProviderAttribution):
+    """Attribution required for every provider-balance feature.
+
+    ``provider_event_id`` is the provider-side deduplication boundary and
+    ``provider`` identifies the party whose tariff or invoice caused the debit.
+    """
 
 
 class ChargeInput(TypedDict, total=False):
@@ -135,11 +164,96 @@ class ConsumptionComponent(ChargeInput):
     feature_code: FeatureCode
 
 
-class ConsumptionRequest(ChargeInput, total=False):
+class _UsageEventRequired(TypedDict):
     source_event_id: str
     occurred_at: str
-    feature_code: FeatureCode
+
+
+class _CountConsumptionOptional(TypedDict, total=False):
+    quantity: ExactAmount
+    metadata: UsageMetadata
+
+
+class Conversation24HConsumptionRequest(_UsageEventRequired, _CountConsumptionOptional):
+    """One or more fixed 24-hour conversation windows; quantity defaults to one."""
+    feature_code: Literal["conversation_24h"]
+
+
+class OutboundDeliveredMessageConsumptionRequest(_UsageEventRequired, _CountConsumptionOptional):
+    """Delivered outbound product messages; quantity defaults to one."""
+    feature_code: Literal["outbound_delivered_message"]
+
+
+class AIAssistActionOverAllowanceConsumptionRequest(_UsageEventRequired, _CountConsumptionOptional):
+    """AI-assist actions after the caller establishes allowance exhaustion."""
+    feature_code: Literal["ai_assist_action_over_allowance"]
+
+
+class AIReplyHandlingConsumptionRequest(_UsageEventRequired, _CountConsumptionOptional):
+    """Included AI reply handling recorded for audit; quantity defaults to one."""
+    feature_code: Literal["ai_reply_handling"]
+
+
+class _StartedMinuteOptional(TypedDict, total=False):
+    metadata: UsageMetadata
+
+
+class VoiceAIStartedMinuteConsumptionRequest(_UsageEventRequired, _StartedMinuteOptional):
+    """Voice AI duration; Mizan charges ``ceil(duration_seconds / 60)`` started minutes."""
+    feature_code: Literal["voice_ai_started_minute"]
+    duration_seconds: ExactAmount
+
+
+class _ProviderQuantityOptional(TypedDict, total=False):
+    quantity: ExactAmount
+
+
+class WhatsAppMetaMarketingMessageConsumptionRequest(_UsageEventRequired, _ProviderQuantityOptional):
+    """Meta marketing-message tariff quantity; quantity defaults to one."""
+    feature_code: Literal["whatsapp_meta_marketing_msg"]
+    metadata: ProviderUsageMetadata
+
+
+class TelephonyVoiceMinuteConsumptionRequest(_UsageEventRequired, _ProviderQuantityOptional):
+    """Provider-normalized outbound billable minutes; quantity defaults to one."""
+    feature_code: Literal["telephony_voice_minute"]
+    metadata: ProviderUsageMetadata
+
+
+class InboundVoiceMinuteConsumptionRequest(_UsageEventRequired, _ProviderQuantityOptional):
+    """Provider-normalized inbound minutes; default catalog treatment is zero-rated."""
+    feature_code: Literal["inbound_voice_minute"]
+    metadata: ProviderUsageMetadata
+
+
+class OtherProviderChargeConsumptionRequest(_UsageEventRequired):
+    """Pass-through provider amount in settlement-currency halala."""
+    feature_code: Literal["other_provider_charge"]
+    provider_amount_minor: ExactAmount
+    metadata: ProviderUsageMetadata
+
+
+class _MultiFeatureOptional(TypedDict, total=False):
+    metadata: UsageMetadata
+
+
+class MultiFeatureConsumptionRequest(_UsageEventRequired, _MultiFeatureOptional):
+    """One source event with one to ten components committed or rejected atomically."""
     components: list[ConsumptionComponent]
+
+
+ConsumptionRequest: TypeAlias = (
+    Conversation24HConsumptionRequest
+    | OutboundDeliveredMessageConsumptionRequest
+    | AIAssistActionOverAllowanceConsumptionRequest
+    | AIReplyHandlingConsumptionRequest
+    | VoiceAIStartedMinuteConsumptionRequest
+    | WhatsAppMetaMarketingMessageConsumptionRequest
+    | TelephonyVoiceMinuteConsumptionRequest
+    | InboundVoiceMinuteConsumptionRequest
+    | OtherProviderChargeConsumptionRequest
+    | MultiFeatureConsumptionRequest
+)
 
 
 class EligibilityRequest(ChargeInput, total=False):
@@ -294,6 +408,7 @@ class EntitlementResponse(BaseEnvelope):
 
 
 class ConsumptionResult(TypedDict, total=False):
+    """Committed decision. Exact values remain decimal strings."""
     accepted: bool
     code: str
     source_event_id: str
@@ -304,6 +419,41 @@ class ConsumptionResult(TypedDict, total=False):
     totals: dict[str, ExactAmount]
     balances: Balance
     details: dict[str, Any]
+
+
+class DeliveryEndpointInput(TypedDict, total=False):
+    """Admin delivery endpoint mutation. Omit ``auth_secret`` to keep the current secret."""
+    endpoint_url: str
+    auth_type: Literal["none", "bearer"]
+    auth_secret: str
+    clear_auth_secret: bool
+    enabled: bool
+    reason: str
+
+
+class DeliveryEndpoint(TypedDict, total=False):
+    """Masked delivery endpoint. ``source`` reports business override or global fallback."""
+    kind: Literal["ledger", "notification"]
+    scope: Literal["business", "global"]
+    source: Literal["business", "global"]
+    endpoint_url: str
+    auth_type: Literal["none", "bearer"]
+    auth_secret_configured: bool
+    enabled: bool
+    revision: int
+    updated_by: str
+    reason: str
+    updated_at: str
+
+
+class DeliveryConfigurationResult(TypedDict):
+    scope: Literal["business", "global"]
+    ready: bool
+    endpoints: list[DeliveryEndpoint | None]
+
+
+class DeliveryConfigurationResponse(BaseEnvelope):
+    data: DeliveryConfigurationResult
 
 
 class ConsumptionResponse(BaseEnvelope):

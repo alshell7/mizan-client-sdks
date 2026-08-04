@@ -29,8 +29,32 @@ The package name is `mizan-billing`; the Python import is `mizan`. The Go module
 
 Template activations use `plan_id`. When an operator has approved a business-specific plan through the Mizan
 admin API/UI, use `plan_configuration_id` instead. Send exactly one of those fields. Delivery endpoint and plan
-approval operations intentionally require the separate admin credential and are not exposed by these runtime
-client SDKs.
+approval operations require a separate admin credential. `MizanAdminClient` (Python) and `AdminClient` (Go)
+expose global and per-business delivery configuration without mixing admin credentials into runtime clients.
+
+## Feature-specific consumption
+
+Every catalog feature has a distinct exported Python `TypedDict`, Go struct, validated builder/method, and test
+case. Quantity-based contracts default to `"1"`; duration and pass-through amount contracts never invent a
+quantity.
+
+| Feature code | Python contract | Go contract |
+|---|---|---|
+| `conversation_24h` | `Conversation24HConsumptionRequest` | `Conversation24HUsage` |
+| `outbound_delivered_message` | `OutboundDeliveredMessageConsumptionRequest` | `OutboundDeliveredMessageUsage` |
+| `ai_assist_action_over_allowance` | `AIAssistActionOverAllowanceConsumptionRequest` | `AIAssistActionOverAllowanceUsage` |
+| `voice_ai_started_minute` | `VoiceAIStartedMinuteConsumptionRequest` | `VoiceAIStartedMinuteUsage` |
+| `ai_reply_handling` | `AIReplyHandlingConsumptionRequest` | `AIReplyHandlingUsage` |
+| `whatsapp_meta_marketing_msg` | `WhatsAppMetaMarketingMessageConsumptionRequest` | `WhatsAppMetaMarketingMessageUsage` |
+| `telephony_voice_minute` | `TelephonyVoiceMinuteConsumptionRequest` | `TelephonyVoiceMinuteUsage` |
+| `inbound_voice_minute` | `InboundVoiceMinuteConsumptionRequest` | `InboundVoiceMinuteUsage` |
+| `other_provider_charge` | `OtherProviderChargeConsumptionRequest` | `OtherProviderChargeUsage` |
+
+The Meta contract fixes the provider to `Meta`. Telephony contracts require provider-normalized billable minutes
+plus the provider/event identity. Pass-through charges require an exact settlement amount in halala.
+
+Provider metadata may also include the provider invoice, original amount/currency, FX rule, tariff version,
+channel account, conversation, campaign, and small scalar application attributes.
 
 ## Safety contract
 

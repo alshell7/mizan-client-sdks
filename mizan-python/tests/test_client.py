@@ -2,10 +2,33 @@ import json
 import unittest
 from urllib.error import URLError
 
-from mizan import MizanAPIError, MizanClient, MizanProtocolError, MizanTransportError, __version__
+from mizan import MizanAdminClient, MizanAPIError, MizanClient, MizanProtocolError, MizanTransportError, __version__
 
 
 class ClientTests(unittest.TestCase):
+    def test_feature_convenience_method_defaults_quantity_and_provider_contract(self):
+        requests = []
+        client = MizanClient("https://billing.test", "secret",
+            transport=lambda request, timeout: (requests.append(request) or (201, {}, b'{"data":{"accepted":true}}')))
+        client.consume_outbound_delivered_message("business-1", source_event_id="msg-1",
+            occurred_at="2026-08-04T00:00:00Z", idempotency_key="msg-1")
+        client.consume_whatsapp_meta_marketing_message("business-1", source_event_id="wamid-1",
+            occurred_at="2026-08-04T00:00:00Z", provider_event_id="wamid.1", idempotency_key="wamid-1")
+        self.assertEqual(json.loads(requests[0].data)["quantity"], "1")
+        self.assertEqual(json.loads(requests[1].data)["metadata"], {"provider": "Meta", "provider_event_id": "wamid.1"})
+
+    def test_admin_client_configures_global_delivery_with_attribution(self):
+        requests = []
+        client = MizanAdminClient("https://admin.test", "admin-secret", actor="ops@example.com",
+            transport=lambda request, timeout: (requests.append(request) or (200, {}, b'{"data":{"ready":true,"endpoints":[]}}')))
+        client.configure_global_delivery_endpoint("ledger", {
+            "endpoint_url": "https://ledger.example/events", "auth_type": "none", "enabled": True,
+            "reason": "Production ledger receiver",
+        }, idempotency_key="global-ledger-v1")
+        self.assertTrue(requests[0].full_url.endswith("/admin/api/delivery-endpoints/ledger"))
+        self.assertEqual(requests[0].get_header("X-admin-actor"), "ops@example.com")
+        self.assertEqual(requests[0].get_header("Idempotency-key"), "global-ledger-v1")
+
     def test_mutation_retries_with_same_idempotency_key(self):
         requests = []
 

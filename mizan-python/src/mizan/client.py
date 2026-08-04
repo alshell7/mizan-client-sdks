@@ -10,6 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
+from . import builders as usage_builders
 from ._version import __version__
 from .enums import Capability, FeatureCode
 from .models import (
@@ -26,6 +27,8 @@ from .models import (
     ConfirmedTopUp,
     ConsumptionRequest,
     ConsumptionResponse,
+    DeliveryConfigurationResponse,
+    DeliveryEndpointInput,
     EligibilityRequest,
     EligibilityResponse,
     EntitlementResponse,
@@ -36,6 +39,7 @@ from .models import (
     RenewalResponse,
     SubscriptionChangeRequest,
     TopUpResponse,
+    UsageMetadata,
 )
 
 Transport = Callable[[Request, float], tuple[int, Mapping[str, str], bytes]]
@@ -227,6 +231,119 @@ class MizanClient:
         """Atomically authorize, charge, record, and sequence one source event."""
         return cast(ConsumptionResponse, self._request("POST", self._business_path(business_id, "consumptions"), request, business_id, idempotency_key))
 
+    def consume_conversation_24h(self, business_id: str, *, source_event_id: str, occurred_at: str,
+                                 quantity: str = "1", metadata: UsageMetadata | None = None,
+                                 idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Charge one or more fixed 24-hour conversation windows."""
+        return self.consume(business_id, usage_builders.conversation_24h(
+            source_event_id=source_event_id, occurred_at=occurred_at, quantity=quantity, metadata=metadata),
+            idempotency_key=idempotency_key)
+
+    def consume_outbound_delivered_message(self, business_id: str, *, source_event_id: str, occurred_at: str,
+                                           quantity: str = "1", metadata: UsageMetadata | None = None,
+                                           idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Charge delivered outbound messages; provider fees remain a separate event/component."""
+        return self.consume(business_id, usage_builders.outbound_delivered_message(
+            source_event_id=source_event_id, occurred_at=occurred_at, quantity=quantity, metadata=metadata),
+            idempotency_key=idempotency_key)
+
+    def consume_ai_assist_action_over_allowance(self, business_id: str, *, source_event_id: str, occurred_at: str,
+                                                quantity: str = "1", metadata: UsageMetadata | None = None,
+                                                idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Charge AI-assist actions only after the calling service establishes allowance exhaustion."""
+        return self.consume(business_id, usage_builders.ai_assist_action_over_allowance(
+            source_event_id=source_event_id, occurred_at=occurred_at, quantity=quantity, metadata=metadata),
+            idempotency_key=idempotency_key)
+
+    def consume_ai_reply_handling(self, business_id: str, *, source_event_id: str, occurred_at: str,
+                                  quantity: str = "1", metadata: UsageMetadata | None = None,
+                                  idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Record included AI reply handling without an extra charge."""
+        return self.consume(business_id, usage_builders.ai_reply_handling(
+            source_event_id=source_event_id, occurred_at=occurred_at, quantity=quantity, metadata=metadata),
+            idempotency_key=idempotency_key)
+
+    def consume_voice_ai_started_minute(self, business_id: str, *, source_event_id: str, occurred_at: str,
+                                        duration_seconds: str, metadata: UsageMetadata | None = None,
+                                        idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Charge Voice AI by started minute from required raw duration seconds."""
+        return self.consume(business_id, usage_builders.voice_ai_started_minute(
+            source_event_id=source_event_id, occurred_at=occurred_at,
+            duration_seconds=duration_seconds, metadata=metadata), idempotency_key=idempotency_key)
+
+    def consume_whatsapp_meta_marketing_message(self, business_id: str, *, source_event_id: str,
+                                                occurred_at: str, provider_event_id: str,
+                                                quantity: str = "1",
+                                                metadata: UsageMetadata | None = None,
+                                                idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Charge Meta marketing messages with mandatory provider-event deduplication."""
+        return self.consume(business_id, usage_builders.whatsapp_meta_marketing_message(
+            source_event_id=source_event_id, occurred_at=occurred_at, provider_event_id=provider_event_id,
+            quantity=quantity, metadata=metadata), idempotency_key=idempotency_key)
+
+    def consume_telephony_voice_minute(self, business_id: str, *, source_event_id: str, occurred_at: str,
+                                       provider: str, provider_event_id: str, billable_minutes: str = "1",
+                                       metadata: UsageMetadata | None = None,
+                                       idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Charge provider-normalized billable minutes, not raw call duration."""
+        return self.consume(business_id, usage_builders.telephony_voice_minute(
+            source_event_id=source_event_id, occurred_at=occurred_at, provider=provider,
+            provider_event_id=provider_event_id, billable_minutes=billable_minutes, metadata=metadata),
+            idempotency_key=idempotency_key)
+
+    def consume_inbound_voice_minute(self, business_id: str, *, source_event_id: str, occurred_at: str,
+                                     provider: str, provider_event_id: str, billable_minutes: str = "1",
+                                     metadata: UsageMetadata | None = None,
+                                     idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Record provider-normalized inbound minutes; catalog tariff may be zero or overridden."""
+        return self.consume(business_id, usage_builders.inbound_voice_minute(
+            source_event_id=source_event_id, occurred_at=occurred_at, provider=provider,
+            provider_event_id=provider_event_id, billable_minutes=billable_minutes, metadata=metadata),
+            idempotency_key=idempotency_key)
+
+    def consume_other_provider_charge(self, business_id: str, *, source_event_id: str, occurred_at: str,
+                                      provider: str, provider_event_id: str, provider_amount_minor: str,
+                                      metadata: UsageMetadata | None = None,
+                                      idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Debit an exact pass-through provider amount in settlement-currency halala."""
+        return self.consume(business_id, usage_builders.other_provider_charge(
+            source_event_id=source_event_id, occurred_at=occurred_at, provider=provider,
+            provider_event_id=provider_event_id, provider_amount_minor=provider_amount_minor,
+            metadata=metadata), idempotency_key=idempotency_key)
+
+    # Compatibility aliases retain complete signatures; canonical names above mirror feature codes.
+    def consume_ai_assist_over_allowance(self, business_id: str, *, source_event_id: str, occurred_at: str,
+                                         quantity: str = "1", metadata: UsageMetadata | None = None,
+                                         idempotency_key: str | None = None) -> ConsumptionResponse:
+        return self.consume_ai_assist_action_over_allowance(
+            business_id, source_event_id=source_event_id, occurred_at=occurred_at,
+            quantity=quantity, metadata=metadata, idempotency_key=idempotency_key)
+
+    def consume_voice_ai(self, business_id: str, *, source_event_id: str, occurred_at: str,
+                         duration_seconds: str, metadata: UsageMetadata | None = None,
+                         idempotency_key: str | None = None) -> ConsumptionResponse:
+        return self.consume_voice_ai_started_minute(
+            business_id, source_event_id=source_event_id, occurred_at=occurred_at,
+            duration_seconds=duration_seconds, metadata=metadata, idempotency_key=idempotency_key)
+
+    def consume_telephony_voice(self, business_id: str, *, source_event_id: str, occurred_at: str,
+                                provider: str, provider_event_id: str, billable_minutes: str = "1",
+                                metadata: UsageMetadata | None = None,
+                                idempotency_key: str | None = None) -> ConsumptionResponse:
+        return self.consume_telephony_voice_minute(
+            business_id, source_event_id=source_event_id, occurred_at=occurred_at,
+            provider=provider, provider_event_id=provider_event_id, billable_minutes=billable_minutes,
+            metadata=metadata, idempotency_key=idempotency_key)
+
+    def consume_inbound_voice(self, business_id: str, *, source_event_id: str, occurred_at: str,
+                              provider: str, provider_event_id: str, billable_minutes: str = "1",
+                              metadata: UsageMetadata | None = None,
+                              idempotency_key: str | None = None) -> ConsumptionResponse:
+        return self.consume_inbound_voice_minute(
+            business_id, source_event_id=source_event_id, occurred_at=occurred_at,
+            provider=provider, provider_event_id=provider_event_id, billable_minutes=billable_minutes,
+            metadata=metadata, idempotency_key=idempotency_key)
+
     def get_billing_summary(self, business_id: str) -> BillingSummaryResponse:
         return cast(BillingSummaryResponse, self._request("GET", self._business_path(business_id, "billing-summary"), None, business_id, None, mutation=False))
 
@@ -250,6 +367,7 @@ class MizanClient:
         idempotency_key: str | None,
         *,
         mutation: bool = True,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> ApiResponse:
         key = idempotency_key or (str(uuid.uuid4()) if mutation else None)
         correlation_id = str(uuid.uuid4())
@@ -268,6 +386,8 @@ class MizanClient:
                 headers["Content-Type"] = "application/json"
             if key:
                 headers["Idempotency-Key"] = key
+            if extra_headers:
+                headers.update(extra_headers)
             request = Request(self.base_url + path, data=encoded, headers=headers, method=method)
             try:
                 status, response_headers, raw = self._transport(request, self.timeout)
@@ -313,3 +433,57 @@ class MizanClient:
     def _log(self, event: str, fields: Mapping[str, Any]) -> None:
         if self._logger:
             self._logger(event, fields)
+
+
+class MizanAdminClient(MizanClient):
+    """Admin-scoped client for global and per-business delivery configuration.
+
+    Use a dedicated Admin Worker token. Every mutation is attributed to ``actor``
+    and ``role`` and must include a human-readable ``reason`` in its request body.
+    """
+
+    def __init__(self, base_url: str, token: str, *, actor: str,
+                 role: str = "billing_admin", **kwargs: Any) -> None:
+        super().__init__(base_url, token, **kwargs)
+        if not actor:
+            raise ValueError("actor is required")
+        if role not in {"billing_admin", "finance_admin", "support_admin"}:
+            raise ValueError("role must be billing_admin, finance_admin, or support_admin")
+        self.actor = actor
+        self.role = role
+
+    def _admin_headers(self) -> Mapping[str, str]:
+        return {"X-Admin-Actor": self.actor, "X-Admin-Role": self.role}
+
+    def get_global_delivery_endpoints(self) -> DeliveryConfigurationResponse:
+        """Read masked fallbacks used only when a business has no endpoint record."""
+        return cast(DeliveryConfigurationResponse, self._request(
+            "GET", "/admin/api/delivery-endpoints", None, "", None, mutation=False,
+            extra_headers=self._admin_headers()))
+
+    def configure_global_delivery_endpoint(self, kind: str, request: DeliveryEndpointInput,
+                                           *, idempotency_key: str | None = None) -> DeliveryConfigurationResponse:
+        """Create, rotate, enable, or disable one global fallback endpoint."""
+        if kind not in {"ledger", "notification"}:
+            raise ValueError("kind must be ledger or notification")
+        return cast(DeliveryConfigurationResponse, self._request(
+            "PUT", f"/admin/api/delivery-endpoints/{kind}", request, "", idempotency_key,
+            extra_headers=self._admin_headers()))
+
+    def get_business_delivery_endpoints(self, business_id: str) -> DeliveryConfigurationResponse:
+        """Read effective endpoints and the source of each resolved endpoint."""
+        path = f"/admin/api/businesses/{quote(business_id, safe='')}/delivery-endpoints"
+        return cast(DeliveryConfigurationResponse, self._request(
+            "GET", path, None, business_id, None, mutation=False,
+            extra_headers=self._admin_headers()))
+
+    def configure_business_delivery_endpoint(self, business_id: str, kind: str,
+                                             request: DeliveryEndpointInput,
+                                             *, idempotency_key: str | None = None) -> DeliveryConfigurationResponse:
+        """Set an explicit business endpoint; an explicit disabled row suppresses fallback."""
+        if kind not in {"ledger", "notification"}:
+            raise ValueError("kind must be ledger or notification")
+        path = f"/admin/api/businesses/{quote(business_id, safe='')}/delivery-endpoints/{kind}"
+        return cast(DeliveryConfigurationResponse, self._request(
+            "PUT", path, request, business_id, idempotency_key,
+            extra_headers=self._admin_headers()))

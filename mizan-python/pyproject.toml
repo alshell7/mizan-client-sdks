@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mizan-billing"
-version = "1.3.0"
+version = "1.4.0"
 description = "Official Python SDK for the Mizan billing and metering API"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -45,4 +45,4 @@ mizan = ["py.typed"]
 [tool.mypy]
 python_version = "3.10"
 strict = true
-files = ["src"]
+files = ["src", "examples"]
