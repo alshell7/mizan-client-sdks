@@ -106,12 +106,16 @@ type OtherProviderChargeUsage struct {
 }
 
 var (
+	// quantityPattern accepts canonical positive decimals with at most milli precision.
 	quantityPattern = regexp.MustCompile(`^(\d+)(?:\.(\d{1,3}))?$`)
-	integerPattern  = regexp.MustCompile(`^\d+$`)
-	maxInt64Exact   = big.NewInt(9_223_372_036_854_775_807)
+	// integerPattern is used for raw seconds and provider halala amounts without coercion.
+	integerPattern = regexp.MustCompile(`^\d+$`)
+	// maxInt64Exact mirrors the Worker's persisted exact-value boundary.
+	maxInt64Exact = big.NewInt(9_223_372_036_854_775_807)
 )
 
 func quantityOrOne(value ExactAmount) ExactAmount {
+	// Only quantity-based contracts define an omitted value as exactly one.
 	if value == "" {
 		return "1"
 	}
@@ -134,6 +138,7 @@ func validateQuantity(value ExactAmount) error {
 		return errors.New("mizan: quantity must be a positive decimal string with at most 3 decimal places")
 	}
 	whole, _ := new(big.Int).SetString(match[1], 10)
+	// Scale through big.Int so validation never passes through float64.
 	scaled := new(big.Int).Mul(whole, big.NewInt(1000))
 	if match[2] != "" {
 		fraction, _ := new(big.Int).SetString(match[2]+strings.Repeat("0", 3-len(match[2])), 10)
@@ -150,6 +155,7 @@ func validateExactInteger(value ExactAmount, field string, allowZero bool) error
 		return fmt.Errorf("mizan: %s must be a non-negative integer string", field)
 	}
 	parsed, _ := new(big.Int).SetString(string(value), 10)
+	// Zero is valid only for contracts such as an exact pass-through provider amount.
 	if parsed.Cmp(maxInt64Exact) > 0 || (!allowZero && parsed.Sign() == 0) {
 		qualifier := "positive"
 		if allowZero {
@@ -175,6 +181,7 @@ func validateMetadata(metadata *UsageMetadata) error {
 		return errors.New("mizan: metadata attributes support at most 32 entries")
 	}
 	for key, value := range metadata.Attributes {
+		// Custom attributes are bounded reconciliation facts, not arbitrary provider payloads.
 		if len(key) > 64 {
 			return errors.New("mizan: metadata attribute keys must be at most 64 characters")
 		}
@@ -207,8 +214,10 @@ func providerMetadata(provider, eventID string, source *UsageMetadata) (*UsageMe
 	}
 	metadata := UsageMetadata{}
 	if source != nil {
+		// Copy the value so canonical provider fields do not mutate caller-owned metadata.
 		metadata = *source
 	}
+	// Required method arguments take precedence over conflicting optional metadata.
 	metadata.Provider = strings.TrimSpace(provider)
 	metadata.ProviderEventID = strings.TrimSpace(eventID)
 	return &metadata, nil
@@ -226,10 +235,12 @@ func countRequest(feature FeatureCode, sourceEventID string, occurredAt time.Tim
 	if err := validateMetadata(metadata); err != nil {
 		return ConsumptionRequest{}, err
 	}
+	// Construct wire input only after every local fact has passed validation.
 	return ConsumptionRequest{SourceEventID: sourceEventID, OccurredAt: occurredAt,
 		FeatureCode: feature, Quantity: string(quantity), Metadata: metadata}, nil
 }
 
+// ConsumeConversation24H records one or more fixed 24-hour conversation windows.
 func (c *Client) ConsumeConversation24H(ctx context.Context, businessID string, in Conversation24HUsage, idempotencyKey string) (Response, error) {
 	request, err := countRequest(FeatureConversation24H, in.SourceEventID, in.OccurredAt, in.Quantity, in.Metadata)
 	if err != nil {
@@ -238,6 +249,7 @@ func (c *Client) ConsumeConversation24H(ctx context.Context, businessID string, 
 	return c.Consume(ctx, businessID, request, idempotencyKey)
 }
 
+// ConsumeOutboundDeliveredMessage records delivered product messages; provider fees are separate.
 func (c *Client) ConsumeOutboundDeliveredMessage(ctx context.Context, businessID string, in OutboundDeliveredMessageUsage, idempotencyKey string) (Response, error) {
 	request, err := countRequest(FeatureOutboundDeliveredMessage, in.SourceEventID, in.OccurredAt, in.Quantity, in.Metadata)
 	if err != nil {
@@ -246,6 +258,7 @@ func (c *Client) ConsumeOutboundDeliveredMessage(ctx context.Context, businessID
 	return c.Consume(ctx, businessID, request, idempotencyKey)
 }
 
+// ConsumeAIAssistActionOverAllowance records actions after the caller establishes allowance exhaustion.
 func (c *Client) ConsumeAIAssistActionOverAllowance(ctx context.Context, businessID string, in AIAssistActionOverAllowanceUsage, idempotencyKey string) (Response, error) {
 	request, err := countRequest(FeatureAIAssistOverAllowance, in.SourceEventID, in.OccurredAt, in.Quantity, in.Metadata)
 	if err != nil {
@@ -254,6 +267,7 @@ func (c *Client) ConsumeAIAssistActionOverAllowance(ctx context.Context, busines
 	return c.Consume(ctx, businessID, request, idempotencyKey)
 }
 
+// ConsumeAIReplyHandling records included handling for audit and fair-use visibility.
 func (c *Client) ConsumeAIReplyHandling(ctx context.Context, businessID string, in AIReplyHandlingUsage, idempotencyKey string) (Response, error) {
 	request, err := countRequest(FeatureAIReplyHandling, in.SourceEventID, in.OccurredAt, in.Quantity, in.Metadata)
 	if err != nil {
@@ -262,6 +276,7 @@ func (c *Client) ConsumeAIReplyHandling(ctx context.Context, businessID string, 
 	return c.Consume(ctx, businessID, request, idempotencyKey)
 }
 
+// ConsumeVoiceAIStartedMinute sends raw seconds; Mizan rounds up to started minutes.
 func (c *Client) ConsumeVoiceAIStartedMinute(ctx context.Context, businessID string, in VoiceAIStartedMinuteUsage, idempotencyKey string) (Response, error) {
 	if err := validateUsageEvent(in.SourceEventID, in.OccurredAt); err != nil {
 		return nil, err
@@ -276,6 +291,7 @@ func (c *Client) ConsumeVoiceAIStartedMinute(ctx context.Context, businessID str
 		FeatureCode: FeatureVoiceAIStartedMinute, DurationSeconds: in.DurationSeconds, Metadata: in.Metadata}, idempotencyKey)
 }
 
+// ConsumeWhatsAppMetaMarketingMessage charges Meta's tariff with provider-event deduplication.
 func (c *Client) ConsumeWhatsAppMetaMarketingMessage(ctx context.Context, businessID string, in WhatsAppMetaMarketingMessageUsage, idempotencyKey string) (Response, error) {
 	metadata, err := providerMetadata("Meta", in.ProviderEventID, in.Metadata)
 	if err != nil {
@@ -288,6 +304,7 @@ func (c *Client) ConsumeWhatsAppMetaMarketingMessage(ctx context.Context, busine
 	return c.Consume(ctx, businessID, request, idempotencyKey)
 }
 
+// ConsumeTelephonyVoiceMinute sends provider-normalized billable minutes, not raw seconds.
 func (c *Client) ConsumeTelephonyVoiceMinute(ctx context.Context, businessID string, in TelephonyVoiceMinuteUsage, idempotencyKey string) (Response, error) {
 	metadata, err := providerMetadata(in.Provider, in.ProviderEventID, in.Metadata)
 	if err != nil {
@@ -300,6 +317,7 @@ func (c *Client) ConsumeTelephonyVoiceMinute(ctx context.Context, businessID str
 	return c.Consume(ctx, businessID, request, idempotencyKey)
 }
 
+// ConsumeInboundVoiceMinute records attributed inbound minutes even when the tariff is zero.
 func (c *Client) ConsumeInboundVoiceMinute(ctx context.Context, businessID string, in InboundVoiceMinuteUsage, idempotencyKey string) (Response, error) {
 	metadata, err := providerMetadata(in.Provider, in.ProviderEventID, in.Metadata)
 	if err != nil {
@@ -312,6 +330,7 @@ func (c *Client) ConsumeInboundVoiceMinute(ctx context.Context, businessID strin
 	return c.Consume(ctx, businessID, request, idempotencyKey)
 }
 
+// ConsumeOtherProviderCharge debits an exact provider-confirmed pass-through amount in halala.
 func (c *Client) ConsumeOtherProviderCharge(ctx context.Context, businessID string, in OtherProviderChargeUsage, idempotencyKey string) (Response, error) {
 	if err := validateUsageEvent(in.SourceEventID, in.OccurredAt); err != nil {
 		return nil, err
@@ -328,18 +347,22 @@ func (c *Client) ConsumeOtherProviderCharge(ctx context.Context, businessID stri
 }
 
 // Compatibility aliases use the same feature-specific contracts.
+// ConsumeAIAssistOverAllowance is a compatibility alias for ConsumeAIAssistActionOverAllowance.
 func (c *Client) ConsumeAIAssistOverAllowance(ctx context.Context, businessID string, in AIAssistActionOverAllowanceUsage, idempotencyKey string) (Response, error) {
 	return c.ConsumeAIAssistActionOverAllowance(ctx, businessID, in, idempotencyKey)
 }
 
+// ConsumeVoiceAI is a compatibility alias for ConsumeVoiceAIStartedMinute.
 func (c *Client) ConsumeVoiceAI(ctx context.Context, businessID string, in VoiceAIStartedMinuteUsage, idempotencyKey string) (Response, error) {
 	return c.ConsumeVoiceAIStartedMinute(ctx, businessID, in, idempotencyKey)
 }
 
+// ConsumeTelephonyVoice is a compatibility alias for ConsumeTelephonyVoiceMinute.
 func (c *Client) ConsumeTelephonyVoice(ctx context.Context, businessID string, in TelephonyVoiceMinuteUsage, idempotencyKey string) (Response, error) {
 	return c.ConsumeTelephonyVoiceMinute(ctx, businessID, in, idempotencyKey)
 }
 
+// ConsumeInboundVoice is a compatibility alias for ConsumeInboundVoiceMinute.
 func (c *Client) ConsumeInboundVoice(ctx context.Context, businessID string, in InboundVoiceMinuteUsage, idempotencyKey string) (Response, error) {
 	return c.ConsumeInboundVoiceMinute(ctx, businessID, in, idempotencyKey)
 }

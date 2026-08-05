@@ -15,76 +15,118 @@ import (
 	"time"
 )
 
+// Version is the SDK version sent in the HTTP User-Agent header.
 const Version = "1.5.0"
 
+// ExactAmount is an exact base-10 integer string. Money uses halala and Azeer
+// Units use milliunits; never construct these values through float64 arithmetic.
 type ExactAmount string
+
+// Response is the forward-compatible Mizan API envelope. Use DecodeData to
+// convert its data member to a documented result type.
 type Response map[string]any
 
+// PlanID identifies an immutable public catalog plan template.
 type PlanID string
 
 const (
-	PlanStart   PlanID = "start"
-	PlanGrowth  PlanID = "growth"
+	// PlanStart is the entry public catalog template.
+	PlanStart PlanID = "start"
+	// PlanGrowth extends Start with growth-tier capabilities and limits.
+	PlanGrowth PlanID = "growth"
+	// PlanCommand is the highest public catalog template.
 	PlanCommand PlanID = "command"
 )
 
+// BillingTerm controls the paid subscription period and catalog discount.
 type BillingTerm string
 
 const (
-	TermMonthly    BillingTerm = "monthly"
-	TermQuarterly  BillingTerm = "quarterly"
+	// TermMonthly is one anchored subscription month with no term discount.
+	TermMonthly BillingTerm = "monthly"
+	// TermQuarterly is three paid months with monthly included-unit grants.
+	TermQuarterly BillingTerm = "quarterly"
+	// TermSemiAnnual is six paid months with monthly included-unit grants.
 	TermSemiAnnual BillingTerm = "semi_annual"
-	TermAnnual     BillingTerm = "annual"
+	// TermAnnual is twelve paid months with all included units granted up front.
+	TermAnnual BillingTerm = "annual"
 )
 
+// FeatureCode identifies a versioned metering and pricing contract.
 type FeatureCode string
 
 const (
-	FeatureConversation24H              FeatureCode = "conversation_24h"
-	FeatureOutboundDeliveredMessage     FeatureCode = "outbound_delivered_message"
-	FeatureAIAssistOverAllowance        FeatureCode = "ai_assist_action_over_allowance"
-	FeatureVoiceAIStartedMinute         FeatureCode = "voice_ai_started_minute"
-	FeatureAIReplyHandling              FeatureCode = "ai_reply_handling"
+	// FeatureConversation24H charges fixed conversation windows in Azeer Units.
+	FeatureConversation24H FeatureCode = "conversation_24h"
+	// FeatureOutboundDeliveredMessage records product delivery; provider fees are separate.
+	FeatureOutboundDeliveredMessage FeatureCode = "outbound_delivered_message"
+	// FeatureAIAssistOverAllowance is used only after included allowance is exhausted.
+	FeatureAIAssistOverAllowance FeatureCode = "ai_assist_action_over_allowance"
+	// FeatureVoiceAIStartedMinute accepts raw seconds and rounds up inside Mizan.
+	FeatureVoiceAIStartedMinute FeatureCode = "voice_ai_started_minute"
+	// FeatureAIReplyHandling is included/zero-charge in the default catalog.
+	FeatureAIReplyHandling FeatureCode = "ai_reply_handling"
+	// FeatureWhatsAppMetaMarketingMessage requires Meta provider-event attribution.
 	FeatureWhatsAppMetaMarketingMessage FeatureCode = "whatsapp_meta_marketing_msg"
-	FeatureTelephonyVoiceMinute         FeatureCode = "telephony_voice_minute"
-	FeatureInboundVoiceMinute           FeatureCode = "inbound_voice_minute"
-	FeatureOtherProviderCharge          FeatureCode = "other_provider_charge"
+	// FeatureTelephonyVoiceMinute accepts provider-normalized outbound billable minutes.
+	FeatureTelephonyVoiceMinute FeatureCode = "telephony_voice_minute"
+	// FeatureInboundVoiceMinute is attributed and zero-rated by the default catalog.
+	FeatureInboundVoiceMinute FeatureCode = "inbound_voice_minute"
+	// FeatureOtherProviderCharge passes through an exact provider amount in halala.
+	FeatureOtherProviderCharge FeatureCode = "other_provider_charge"
 )
 
+// Currency is an ISO currency accepted by the Mizan contract.
 type Currency string
 
+// CurrencySAR is Saudi riyal; all money amounts are integer halala strings.
 const CurrencySAR Currency = "SAR"
 
+// PaymentStatus is the trusted outcome of a uniquely identified payment event.
 type PaymentStatus string
 
 const (
+	// PaymentConfirmed requires exact currency and total reconciliation.
 	PaymentConfirmed PaymentStatus = "confirmed"
-	PaymentFailed    PaymentStatus = "failed"
+	// PaymentFailed is valid for renewal events and moves the account past due.
+	PaymentFailed PaymentStatus = "failed"
 )
 
+// RefundStatus is the trusted outcome of a uniquely identified refund event.
 type RefundStatus string
 
+// RefundConfirmed records a trusted, completed provider refund.
 const RefundConfirmed RefundStatus = "confirmed"
 
+// BudgetMetric selects the exact value accumulated for a feature budget.
 type BudgetMetric string
 
 const (
+	// BudgetAzeerUnitMillis accumulates platform-credit spend in milliunits.
 	BudgetAzeerUnitMillis BudgetMetric = "azeer_unit_millis"
-	BudgetMoneyMinor      BudgetMetric = "money_minor"
-	BudgetQuantity        BudgetMetric = "quantity"
+	// BudgetMoneyMinor accumulates provider-wallet spend in halala.
+	BudgetMoneyMinor BudgetMetric = "money_minor"
+	// BudgetQuantity accumulates normalized quantities in thousandths.
+	BudgetQuantity BudgetMetric = "quantity"
 )
 
+// BudgetPeriod selects the lifecycle window in which a budget counter resets.
 type BudgetPeriod string
 
+// BudgetSubscriptionMonth is anchored to subscription activation, not calendar month start.
 const BudgetSubscriptionMonth BudgetPeriod = "subscription_month"
 
+// BudgetAction controls whether crossing a limit alerts or rejects usage.
 type BudgetAction string
 
 const (
+	// BudgetAlert commits crossing usage and emits warning or breach notifications.
 	BudgetAlert BudgetAction = "alert"
+	// BudgetPause rejects the crossing request and keeps the feature paused.
 	BudgetPause BudgetAction = "pause"
 )
 
+// Channel identifies application attribution stored with a usage decision.
 type Channel string
 
 const (
@@ -96,63 +138,75 @@ const (
 	ChannelWebchat   Channel = "webchat"
 )
 
+// RecurringAddonCode identifies a catalog-backed subscription add-on.
 type RecurringAddonCode string
 
 const (
-	AddonWhatsApp011Landline         RecurringAddonCode = "whatsapp_011_landline"
-	AddonWhatsApp05Mobile            RecurringAddonCode = "whatsapp_05_mobile"
-	AddonConcurrentCalls5            RecurringAddonCode = "concurrent_calls_5"
-	AddonConcurrentCalls10           RecurringAddonCode = "concurrent_calls_10"
-	AddonConcurrentCalls20           RecurringAddonCode = "concurrent_calls_20"
-	AddonAutoDialer                  RecurringAddonCode = "auto_dialer"
-	AddonCSATStart                   RecurringAddonCode = "csat_start"
+	// Fixed-price catalog add-ons.
+	AddonWhatsApp011Landline RecurringAddonCode = "whatsapp_011_landline"
+	AddonWhatsApp05Mobile    RecurringAddonCode = "whatsapp_05_mobile"
+	AddonConcurrentCalls5    RecurringAddonCode = "concurrent_calls_5"
+	AddonConcurrentCalls10   RecurringAddonCode = "concurrent_calls_10"
+	AddonConcurrentCalls20   RecurringAddonCode = "concurrent_calls_20"
+	AddonAutoDialer          RecurringAddonCode = "auto_dialer"
+	AddonCSATStart           RecurringAddonCode = "csat_start"
+	// AddonInstagramAdditionalAccounts uses per-unit tier pricing.
 	AddonInstagramAdditionalAccounts RecurringAddonCode = "instagram_additional_accounts"
-	AddonWhatsApp9200                RecurringAddonCode = "whatsapp_9200"
-	AddonTollFree800                 RecurringAddonCode = "toll_free_800"
-	AddonInternationalNumber         RecurringAddonCode = "international_number"
-	AddonOutboundMinutes500          RecurringAddonCode = "outbound_minute_bundle_500"
-	AddonOutboundMinutes1000         RecurringAddonCode = "outbound_minute_bundle_1000"
-	AddonVoiceBroadcast              RecurringAddonCode = "voice_broadcast"
-	AddonExtendedRecordingRetention  RecurringAddonCode = "recording_retention_extended"
+	// Quote-priced add-ons require approved quote ID and monthly price evidence.
+	AddonWhatsApp9200               RecurringAddonCode = "whatsapp_9200"
+	AddonTollFree800                RecurringAddonCode = "toll_free_800"
+	AddonInternationalNumber        RecurringAddonCode = "international_number"
+	AddonOutboundMinutes500         RecurringAddonCode = "outbound_minute_bundle_500"
+	AddonOutboundMinutes1000        RecurringAddonCode = "outbound_minute_bundle_1000"
+	AddonVoiceBroadcast             RecurringAddonCode = "voice_broadcast"
+	AddonExtendedRecordingRetention RecurringAddonCode = "recording_retention_extended"
 )
 
+// ErrorCode is a stable machine-readable API decision code.
 type ErrorCode string
 
 const (
-	ErrCodeInvalidRequest                   ErrorCode = "INVALID_REQUEST"
-	ErrCodeUnauthorized                     ErrorCode = "UNAUTHORIZED"
-	ErrCodeForbidden                        ErrorCode = "FORBIDDEN"
-	ErrCodeNotFound                         ErrorCode = "NOT_FOUND"
-	ErrCodeAccountInactive                  ErrorCode = "ACCOUNT_INACTIVE"
-	ErrCodeSubscriptionInactive             ErrorCode = "SUBSCRIPTION_INACTIVE"
-	ErrCodeFeatureDisabled                  ErrorCode = "FEATURE_DISABLED"
-	ErrCodeFeaturePausedBudget              ErrorCode = "FEATURE_PAUSED_BUDGET"
-	ErrCodeFeaturePausedManual              ErrorCode = "FEATURE_PAUSED_MANUAL"
-	ErrCodeInsufficientAzeerUnits           ErrorCode = "INSUFFICIENT_AZEER_UNITS"
-	ErrCodeInsufficientProviderBalance      ErrorCode = "INSUFFICIENT_PROVIDER_BALANCE"
-	ErrCodePaymentAmountMismatch            ErrorCode = "PAYMENT_AMOUNT_MISMATCH"
-	ErrCodeIdempotencyKeyReused             ErrorCode = "IDEMPOTENCY_KEY_REUSED"
+	// Client/request validation and authentication errors.
+	ErrCodeInvalidRequest ErrorCode = "INVALID_REQUEST"
+	ErrCodeUnauthorized   ErrorCode = "UNAUTHORIZED"
+	ErrCodeForbidden      ErrorCode = "FORBIDDEN"
+	ErrCodeNotFound       ErrorCode = "NOT_FOUND"
+	// Account, subscription, feature, and funding decisions.
+	ErrCodeAccountInactive             ErrorCode = "ACCOUNT_INACTIVE"
+	ErrCodeSubscriptionInactive        ErrorCode = "SUBSCRIPTION_INACTIVE"
+	ErrCodeFeatureDisabled             ErrorCode = "FEATURE_DISABLED"
+	ErrCodeFeaturePausedBudget         ErrorCode = "FEATURE_PAUSED_BUDGET"
+	ErrCodeFeaturePausedManual         ErrorCode = "FEATURE_PAUSED_MANUAL"
+	ErrCodeInsufficientAzeerUnits      ErrorCode = "INSUFFICIENT_AZEER_UNITS"
+	ErrCodeInsufficientProviderBalance ErrorCode = "INSUFFICIENT_PROVIDER_BALANCE"
+	// Payment and replay conflicts require reconciliation rather than blind retries.
+	ErrCodePaymentAmountMismatch ErrorCode = "PAYMENT_AMOUNT_MISMATCH"
+	ErrCodeIdempotencyKeyReused  ErrorCode = "IDEMPOTENCY_KEY_REUSED"
+	// Retryable infrastructure failures preserve the original body and key.
 	ErrCodeInternalRetryable                ErrorCode = "INTERNAL_RETRYABLE"
 	ErrCodeDependencyTemporarilyUnavailable ErrorCode = "DEPENDENCY_TEMPORARILY_UNAVAILABLE"
 	ErrCodeDuplicatePaymentEvent            ErrorCode = "DUPLICATE_PAYMENT_EVENT"
 	ErrCodeDuplicateProviderEvent           ErrorCode = "DUPLICATE_PROVIDER_EVENT"
 	ErrCodeDuplicateSourceEvent             ErrorCode = "DUPLICATE_SOURCE_EVENT"
-	ErrCodeEarlyRenewalEvent                ErrorCode = "EARLY_RENEWAL_EVENT"
-	ErrCodeInvalidQuantity                  ErrorCode = "INVALID_QUANTITY"
-	ErrCodeInvariantViolation               ErrorCode = "INVARIANT_VIOLATION"
-	ErrCodeMisconfigured                    ErrorCode = "MISCONFIGURED"
-	ErrCodeQuoteRequired                    ErrorCode = "QUOTE_REQUIRED"
-	ErrCodeQuoteVerificationUnavailable     ErrorCode = "QUOTE_VERIFICATION_UNAVAILABLE"
-	ErrCodeRequestTimestampOutOfRange       ErrorCode = "REQUEST_TIMESTAMP_OUT_OF_RANGE"
-	ErrCodeSensitiveReserveReached          ErrorCode = "SENSITIVE_RESERVE_REACHED"
-	ErrCodeStalePlanVersion                 ErrorCode = "STALE_PLAN_VERSION"
-	ErrCodeSubscriptionChangePending        ErrorCode = "SUBSCRIPTION_CHANGE_PENDING"
+	// Remaining commercial, timing, configuration, and invariant decisions.
+	ErrCodeEarlyRenewalEvent            ErrorCode = "EARLY_RENEWAL_EVENT"
+	ErrCodeInvalidQuantity              ErrorCode = "INVALID_QUANTITY"
+	ErrCodeInvariantViolation           ErrorCode = "INVARIANT_VIOLATION"
+	ErrCodeMisconfigured                ErrorCode = "MISCONFIGURED"
+	ErrCodeQuoteRequired                ErrorCode = "QUOTE_REQUIRED"
+	ErrCodeQuoteVerificationUnavailable ErrorCode = "QUOTE_VERIFICATION_UNAVAILABLE"
+	ErrCodeRequestTimestampOutOfRange   ErrorCode = "REQUEST_TIMESTAMP_OUT_OF_RANGE"
+	ErrCodeSensitiveReserveReached      ErrorCode = "SENSITIVE_RESERVE_REACHED"
+	ErrCodeStalePlanVersion             ErrorCode = "STALE_PLAN_VERSION"
+	ErrCodeSubscriptionChangePending    ErrorCode = "SUBSCRIPTION_CHANGE_PENDING"
 )
 
+// DomainError is a sentinel matched by errors.Is against an APIError.
 type DomainError ErrorCode
 
 func (e DomainError) Error() string { return "mizan: " + string(e) }
 
+// Known domain-error sentinels support errors.Is without discarding APIError details.
 var (
 	ErrInvalidRequest              = DomainError(ErrCodeInvalidRequest)
 	ErrUnauthorized                = DomainError(ErrCodeUnauthorized)
@@ -170,11 +224,15 @@ var (
 	ErrInternalRetryable           = DomainError(ErrCodeInternalRetryable)
 )
 
+// Balance contains post-transaction exact balances for both billing rails.
 type Balance struct {
-	AzeerUnitMillis      ExactAmount `json:"azeer_unit_millis"`
+	// AzeerUnitMillis is the remaining platform-credit balance in thousandths of a unit.
+	AzeerUnitMillis ExactAmount `json:"azeer_unit_millis"`
+	// ProviderBalanceMinor is the remaining prepaid provider wallet in halala.
 	ProviderBalanceMinor ExactAmount `json:"provider_balance_minor"`
 }
 
+// InvoiceLine is one immutable, independently taxed invoice line.
 type InvoiceLine struct {
 	Code               string      `json:"code"`
 	Quantity           ExactAmount `json:"quantity"`
@@ -185,6 +243,7 @@ type InvoiceLine struct {
 	TotalMinor         ExactAmount `json:"total_minor"`
 }
 
+// Invoice contains exact halala totals calculated by the authoritative Worker.
 type Invoice struct {
 	ID                 string        `json:"id"`
 	Currency           Currency      `json:"currency"`
@@ -196,6 +255,7 @@ type Invoice struct {
 	Lines              []InvoiceLine `json:"lines"`
 }
 
+// ActivationResult describes the committed first subscription period and funding grant.
 type ActivationResult struct {
 	SubscriptionID            string      `json:"subscription_id"`
 	CycleID                   string      `json:"cycle_id"`
@@ -208,19 +268,28 @@ type ActivationResult struct {
 	Balances                  Balance     `json:"balances"`
 }
 
+// ConsumptionResult is the authoritative all-or-nothing decision for one source event.
 type ConsumptionResult struct {
-	Accepted             bool                   `json:"accepted"`
-	Code                 string                 `json:"code"`
-	SourceEventID        string                 `json:"source_event_id"`
-	LedgerEntryID        string                 `json:"ledger_entry_id"`
-	BusinessSequence     int64                  `json:"business_sequence"`
-	Charges              []map[string]any       `json:"charges"`
+	// Accepted is true only when every component and related record committed atomically.
+	Accepted bool `json:"accepted"`
+	// Code is the authoritative stable decision; do not parse an error message instead.
+	Code          string `json:"code"`
+	SourceEventID string `json:"source_event_id"`
+	// LedgerEntryID links the decision to immutable financial history.
+	LedgerEntryID string `json:"ledger_entry_id"`
+	// BusinessSequence orders downstream ledger replication for this business.
+	BusinessSequence int64 `json:"business_sequence"`
+	// Charges contains normalized exact per-component rail amounts.
+	Charges []map[string]any `json:"charges"`
+	// AllocationsByFeature identifies Azeer credit lots consumed by each component.
 	AllocationsByFeature []map[string]any       `json:"allocations_by_feature"`
 	Totals               map[string]ExactAmount `json:"totals"`
-	Balances             Balance                `json:"balances"`
-	Details              map[string]any         `json:"details"`
+	// Balances are post-transaction values, not a preflight projection.
+	Balances Balance        `json:"balances"`
+	Details  map[string]any `json:"details"`
 }
 
+// EntitlementResult reports whether an active subscription snapshot includes a capability.
 type EntitlementResult struct {
 	Capability Capability     `json:"capability"`
 	Enabled    bool           `json:"enabled"`
@@ -228,11 +297,13 @@ type EntitlementResult struct {
 	FairUse    map[string]any `json:"fair_use"`
 }
 
+// LedgerResult is a business-sequence page of immutable financial history.
 type LedgerResult struct {
 	Entries           []map[string]any `json:"entries"`
 	NextAfterSequence *int64           `json:"next_after_sequence"`
 }
 
+// BillingSummaryResult is the current account view for billing and support interfaces.
 type BillingSummaryResult struct {
 	BusinessID   string           `json:"business_id"`
 	Account      map[string]any   `json:"account"`
@@ -262,6 +333,7 @@ func DecodeData[T any](response Response) (T, error) {
 	return result, nil
 }
 
+// RecurringAddon selects an add-on and, for quote pricing, its approved exact price.
 type RecurringAddon struct {
 	Code                 RecurringAddonCode `json:"code"`
 	Quantity             ExactAmount        `json:"quantity,omitempty"`
@@ -269,21 +341,27 @@ type RecurringAddon struct {
 	ApprovedMonthlyMinor ExactAmount        `json:"approved_monthly_minor,omitempty"`
 }
 
+// ActivationRequest creates and pays the first subscription period. Set exactly
+// one of PlanID and PlanConfigurationID and use the current catalog version.
 type ActivationRequest struct {
-	CatalogVersion      string           `json:"catalog_version"`
-	PlanID              PlanID           `json:"plan_id,omitempty"`
-	PlanConfigurationID string           `json:"plan_configuration_id,omitempty"`
-	Term                BillingTerm      `json:"term"`
-	Seats               int              `json:"seats"`
-	Timezone            string           `json:"timezone,omitempty"`
-	PaymentStatus       PaymentStatus    `json:"payment_status"`
-	PaymentEventID      string           `json:"payment_event_id"`
-	Currency            Currency         `json:"currency"`
-	PaidTotalMinor      ExactAmount      `json:"paid_total_minor"`
-	Addons              []RecurringAddon `json:"addons,omitempty"`
-	Services            []map[string]any `json:"services,omitempty"`
+	// CatalogVersion prevents checkout created under stale prices from activating.
+	CatalogVersion string `json:"catalog_version"`
+	// Set exactly one of PlanID and PlanConfigurationID.
+	PlanID              PlanID        `json:"plan_id,omitempty"`
+	PlanConfigurationID string        `json:"plan_configuration_id,omitempty"`
+	Term                BillingTerm   `json:"term"`
+	Seats               int           `json:"seats"`
+	Timezone            string        `json:"timezone,omitempty"`
+	PaymentStatus       PaymentStatus `json:"payment_status"`
+	PaymentEventID      string        `json:"payment_event_id"`
+	Currency            Currency      `json:"currency"`
+	// PaidTotalMinor is the trusted payment total including VAT in halala.
+	PaidTotalMinor ExactAmount      `json:"paid_total_minor"`
+	Addons         []RecurringAddon `json:"addons,omitempty"`
+	Services       []map[string]any `json:"services,omitempty"`
 }
 
+// SubscriptionChangeRequest schedules a catalog-backed change at renewal; v1 does not prorate.
 type SubscriptionChangeRequest struct {
 	CatalogVersion      string           `json:"catalog_version"`
 	PlanID              PlanID           `json:"plan_id,omitempty"`
@@ -295,11 +373,13 @@ type SubscriptionChangeRequest struct {
 	Reason              string           `json:"reason,omitempty"`
 }
 
+// CancellationRequest schedules cancellation at the end of the paid period.
 type CancellationRequest struct {
 	EventID string `json:"event_id,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 }
 
+// RenewalEventRequest applies one unique confirmed or failed payment-provider event.
 type RenewalEventRequest struct {
 	PaymentEventID string        `json:"payment_event_id"`
 	PaymentStatus  PaymentStatus `json:"payment_status"`
@@ -307,6 +387,7 @@ type RenewalEventRequest struct {
 	PaidTotalMinor ExactAmount   `json:"paid_total_minor,omitempty"`
 }
 
+// ConfirmedTopUp records exact confirmed funding; PaidTotalMinor includes VAT.
 type ConfirmedTopUp struct {
 	AmountMinor    ExactAmount   `json:"amount_minor"`
 	PaymentEventID string        `json:"payment_event_id"`
@@ -315,6 +396,7 @@ type ConfirmedTopUp struct {
 	PaidTotalMinor ExactAmount   `json:"paid_total_minor"`
 }
 
+// ProviderRefundRequest records a confirmed refund as compensating immutable history.
 type ProviderRefundRequest struct {
 	AmountMinor        ExactAmount  `json:"amount_minor"`
 	PaymentEventID     string       `json:"payment_event_id"`
@@ -324,6 +406,7 @@ type ProviderRefundRequest struct {
 	Reason             string       `json:"reason"`
 }
 
+// BudgetRequest configures one feature's subscription-month limit and reserve policy.
 type BudgetRequest struct {
 	Metric          BudgetMetric `json:"metric"`
 	Period          BudgetPeriod `json:"period"`
@@ -335,6 +418,8 @@ type BudgetRequest struct {
 	ReserveBPS      int          `json:"reserve_bps,omitempty"`
 }
 
+// UsageMetadata contains bounded reconciliation and application attribution. Do
+// not include credentials, signatures, or unrestricted provider payloads.
 type UsageMetadata struct {
 	Actor            map[string]string `json:"actor,omitempty"`
 	Channel          Channel           `json:"channel,omitempty"`
@@ -360,6 +445,7 @@ type UsageMetadata struct {
 	Attributes    map[string]any `json:"attributes,omitempty"`
 }
 
+// ConsumptionComponent is one unique feature charge within an atomic source event.
 type ConsumptionComponent struct {
 	FeatureCode         FeatureCode    `json:"feature_code"`
 	Quantity            string         `json:"quantity,omitempty"`
@@ -368,6 +454,8 @@ type ConsumptionComponent struct {
 	Metadata            *UsageMetadata `json:"metadata,omitempty"`
 }
 
+// ConsumptionRequest records either one top-level feature or one to ten Components.
+// All components are accepted and charged together or rejected without partial debit.
 type ConsumptionRequest struct {
 	SourceEventID       string                 `json:"source_event_id"`
 	OccurredAt          time.Time              `json:"occurred_at"`
@@ -379,6 +467,7 @@ type ConsumptionRequest struct {
 	Components          []ConsumptionComponent `json:"components,omitempty"`
 }
 
+// EligibilityRequest previews a charge without reserving funds or changing state.
 type EligibilityRequest struct {
 	Quantity            string                 `json:"quantity,omitempty"`
 	DurationSeconds     ExactAmount            `json:"duration_seconds,omitempty"`
@@ -387,13 +476,18 @@ type EligibilityRequest struct {
 	Components          []ConsumptionComponent `json:"components,omitempty"`
 }
 
+// APIError is a structured Mizan rejection. Retryable is authoritative; for a
+// mutation, any retry must preserve the original request and IdempotencyKey.
 type APIError struct {
-	Status         int
-	Code           ErrorCode
-	Message        string
-	Retryable      bool
-	Details        map[string]any
-	RequestID      string
+	Status int
+	// Code is stable machine vocabulary suitable for errors.Is and business logic.
+	Code    ErrorCode
+	Message string
+	// Retryable permits an unchanged retry; it never permits a new key or altered input.
+	Retryable bool
+	Details   map[string]any
+	RequestID string
+	// IdempotencyKey must be retained when the mutation outcome is uncertain.
 	IdempotencyKey string
 }
 
@@ -403,13 +497,19 @@ func (e *APIError) Is(target error) bool {
 	return ok && ErrorCode(code) == e.Code
 }
 
+// NewConfirmedTopUp builds a confirmed SAR top-up. amount is principal in halala;
+// paidTotal is the trusted total including VAT.
 func NewConfirmedTopUp(amount ExactAmount, paymentEventID string, paidTotal ExactAmount) ConfirmedTopUp {
 	return ConfirmedTopUp{AmountMinor: amount, PaymentEventID: paymentEventID, PaymentStatus: PaymentConfirmed, Currency: CurrencySAR, PaidTotalMinor: paidTotal}
 }
+
+// NewBudget builds a subscription-month budget with the default 80% warning threshold.
 func NewBudget(metric BudgetMetric, limit ExactAmount, action BudgetAction) BudgetRequest {
 	return BudgetRequest{Metric: metric, Period: BudgetSubscriptionMonth, Limit: limit, WarningBPS: 8000, Action: action}
 }
 
+// TransportError means the request outcome is unknown. A mutation may already
+// have committed, so retry only with the identical input and IdempotencyKey.
 type TransportError struct {
 	Err            error
 	RequestID      string
@@ -419,6 +519,7 @@ type TransportError struct {
 func (e *TransportError) Error() string { return "mizan: request outcome is unknown: " + e.Err.Error() }
 func (e *TransportError) Unwrap() error { return e.Err }
 
+// ProtocolError reports an invalid, non-object, or oversized API response.
 type ProtocolError struct {
 	Message        string
 	RequestID      string
@@ -427,12 +528,18 @@ type ProtocolError struct {
 
 func (e *ProtocolError) Error() string { return "mizan: protocol error: " + e.Message }
 
+// Logger receives structured SDK lifecycle events. Fields never include the token.
 type Logger func(event string, fields map[string]any)
 
+// Client is a calculation-free, concurrency-safe client for the authoritative API.
+// Its exported fields may be configured before concurrent use and must not then be mutated.
 type Client struct {
-	BaseURL     string
-	Token       string
-	HTTPClient  *http.Client
+	BaseURL string
+	// Token is a server credential and must never be logged or shipped to client applications.
+	Token string
+	// HTTPClient controls timeouts, transports, and connection reuse; nil uses a 10-second client.
+	HTTPClient *http.Client
+	// MaxAttempts applies to mutation retries only and defaults to three.
 	MaxAttempts int
 	Logger      Logger
 }
@@ -464,12 +571,15 @@ type DeliveryEndpoint struct {
 	UpdatedAt            string `json:"updated_at"`
 }
 
+// DeliveryConfigurationResult reports effective endpoint precedence and readiness.
 type DeliveryConfigurationResult struct {
 	Scope     string              `json:"scope"`
 	Ready     bool                `json:"ready"`
 	Endpoints []*DeliveryEndpoint `json:"endpoints"`
 }
 
+// NewClient creates a client with a 10-second HTTP timeout and three mutation attempts.
+// baseURL must be absolute HTTP(S) without credentials, query, or fragment.
 func NewClient(baseURL, token string) (*Client, error) {
 	baseURL = strings.TrimRight(baseURL, "/")
 	if baseURL == "" || token == "" {
@@ -492,6 +602,7 @@ type AdminClient struct {
 	Role  string
 }
 
+// NewAdminClient creates an attributed billing_admin client using a dedicated admin token.
 func NewAdminClient(baseURL, token, actor string) (*AdminClient, error) {
 	client, err := NewClient(baseURL, token)
 	if err != nil {
@@ -513,6 +624,7 @@ func (c *AdminClient) headers() (map[string]string, error) {
 	return map[string]string{"X-Admin-Actor": c.Actor, "X-Admin-Role": c.Role}, nil
 }
 
+// GetGlobalDeliveryEndpoints reads masked fallbacks used when no business row exists.
 func (c *AdminClient) GetGlobalDeliveryEndpoints(ctx context.Context) (Response, error) {
 	headers, err := c.headers()
 	if err != nil {
@@ -521,6 +633,7 @@ func (c *AdminClient) GetGlobalDeliveryEndpoints(ctx context.Context) (Response,
 	return c.requestWithHeaders(ctx, http.MethodGet, "/admin/api/delivery-endpoints", "", nil, "", false, headers)
 }
 
+// ConfigureGlobalDeliveryEndpoint creates, rotates, enables, or disables one global fallback.
 func (c *AdminClient) ConfigureGlobalDeliveryEndpoint(ctx context.Context, kind string, in DeliveryEndpointInput, idempotencyKey string) (Response, error) {
 	if kind != "ledger" && kind != "notification" {
 		return nil, errors.New("mizan: delivery kind must be ledger or notification")
@@ -535,6 +648,7 @@ func (c *AdminClient) ConfigureGlobalDeliveryEndpoint(ctx context.Context, kind 
 	return c.requestWithHeaders(ctx, http.MethodPut, "/admin/api/delivery-endpoints/"+kind, "", in, idempotencyKey, true, headers)
 }
 
+// GetBusinessDeliveryEndpoints reads the effective endpoints and source for a business.
 func (c *AdminClient) GetBusinessDeliveryEndpoints(ctx context.Context, businessID string) (Response, error) {
 	headers, err := c.headers()
 	if err != nil {
@@ -544,6 +658,8 @@ func (c *AdminClient) GetBusinessDeliveryEndpoints(ctx context.Context, business
 	return c.requestWithHeaders(ctx, http.MethodGet, path, businessID, nil, "", false, headers)
 }
 
+// ConfigureBusinessDeliveryEndpoint sets an explicit business row. A disabled row
+// intentionally suppresses global fallback for that kind.
 func (c *AdminClient) ConfigureBusinessDeliveryEndpoint(ctx context.Context, businessID, kind string, in DeliveryEndpointInput, idempotencyKey string) (Response, error) {
 	if kind != "ledger" && kind != "notification" {
 		return nil, errors.New("mizan: delivery kind must be ledger or notification")
@@ -559,47 +675,72 @@ func (c *AdminClient) ConfigureBusinessDeliveryEndpoint(ctx context.Context, bus
 	return c.requestWithHeaders(ctx, http.MethodPut, path, businessID, in, idempotencyKey, true, headers)
 }
 
+// ActivateSubscription validates payment against the exact invoice and creates the first period.
 func (c *Client) ActivateSubscription(ctx context.Context, businessID string, in ActivationRequest, idempotencyKey string) (Response, error) {
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "subscriptions/activate"), businessID, in, idempotencyKey)
 }
+
+// ChangeSubscription schedules one change for the next renewal boundary.
 func (c *Client) ChangeSubscription(ctx context.Context, businessID string, in SubscriptionChangeRequest, idempotencyKey string) (Response, error) {
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "subscriptions/change"), businessID, in, idempotencyKey)
 }
+
+// CancelSubscription schedules cancellation at the current paid period end.
 func (c *Client) CancelSubscription(ctx context.Context, businessID string, in CancellationRequest, idempotencyKey string) (Response, error) {
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "subscriptions/cancel"), businessID, in, idempotencyKey)
 }
+
+// ApplyRenewalEvent records a unique renewal payment outcome and applies any pending change.
 func (c *Client) ApplyRenewalEvent(ctx context.Context, businessID string, in RenewalEventRequest, idempotencyKey string) (Response, error) {
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "subscriptions/renewal-events"), businessID, in, idempotencyKey)
 }
+
+// TopUpAzeerUnits purchases a separately expiring exact Azeer Unit lot.
 func (c *Client) TopUpAzeerUnits(ctx context.Context, businessID string, in ConfirmedTopUp, idempotencyKey string) (Response, error) {
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "azeer-units/top-ups"), businessID, in, idempotencyKey)
 }
+
+// TopUpProviderBalance funds exact prepaid third-party costs in halala.
 func (c *Client) TopUpProviderBalance(ctx context.Context, businessID string, in ConfirmedTopUp, idempotencyKey string) (Response, error) {
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "provider-balance/top-ups"), businessID, in, idempotencyKey)
 }
+
+// RefundProviderBalance records a confirmed refund as compensating ledger history.
 func (c *Client) RefundProviderBalance(ctx context.Context, businessID string, in ProviderRefundRequest, idempotencyKey string) (Response, error) {
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "provider-balance/refunds"), businessID, in, idempotencyKey)
 }
+
+// SetFeatureBudget replaces one feature's subscription-month budget configuration.
 func (c *Client) SetFeatureBudget(ctx context.Context, businessID string, featureCode FeatureCode, in BudgetRequest, idempotencyKey string) (Response, error) {
 	return c.mutate(ctx, http.MethodPut, c.businessPath(businessID, "features/"+url.PathEscape(string(featureCode))+"/budget"), businessID, in, idempotencyKey)
 }
+
+// CheckEligibility returns an advisory preview that neither reserves balance nor changes state.
 func (c *Client) CheckEligibility(ctx context.Context, businessID string, featureCode FeatureCode, in EligibilityRequest) (Response, error) {
 	return c.request(ctx, http.MethodPost, c.businessPath(businessID, "features/"+url.PathEscape(string(featureCode))+"/eligibility"), businessID, in, "", false)
 }
 
+// GetEntitlement checks a capability in the active immutable subscription snapshot.
 func (c *Client) GetEntitlement(ctx context.Context, businessID string, capability Capability) (Response, error) {
 	return c.request(ctx, http.MethodGet, c.businessPath(businessID, "entitlements/"+url.PathEscape(string(capability))), businessID, nil, "", false)
 }
 
+// GetCatalog returns current plans, prices, versions, and public contract values.
 func (c *Client) GetCatalog(ctx context.Context) (Response, error) {
 	return c.request(ctx, http.MethodGet, "/v1/catalog", "", nil, "", false)
 }
+
+// Consume authoritatively checks and atomically records one source event.
 func (c *Client) Consume(ctx context.Context, businessID string, in ConsumptionRequest, idempotencyKey string) (Response, error) {
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "consumptions"), businessID, in, idempotencyKey)
 }
+
+// GetBillingSummary returns current account, subscription, balances, lots, budgets, and replication state.
 func (c *Client) GetBillingSummary(ctx context.Context, businessID string) (Response, error) {
 	return c.request(ctx, http.MethodGet, c.businessPath(businessID, "billing-summary"), businessID, nil, "", false)
 }
+
+// GetLedger returns up to limit entries strictly after afterSequence; limit must be 1..100.
 func (c *Client) GetLedger(ctx context.Context, businessID string, afterSequence int64, limit int) (Response, error) {
 	if afterSequence < 0 || limit < 1 || limit > 100 {
 		return nil, errors.New("mizan: afterSequence must be non-negative and limit must be 1..100")
@@ -623,6 +764,7 @@ func (c *Client) requestWithHeaders(ctx context.Context, method, path, businessI
 	var payload []byte
 	var err error
 	if in != nil {
+		// Encode once so every uncertain mutation retry sends byte-identical JSON.
 		payload, err = json.Marshal(in)
 		if err != nil {
 			return nil, fmt.Errorf("mizan: encode request: %w", err)
@@ -639,6 +781,7 @@ func (c *Client) requestWithHeaders(ctx context.Context, method, path, businessI
 	correlationID := newID()
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
+		// Correlation ID, idempotency key, and body remain stable; timestamp reflects this attempt.
 		req, reqErr := http.NewRequestWithContext(ctx, method, c.BaseURL+path, bytes.NewReader(payload))
 		if reqErr != nil {
 			return nil, reqErr
@@ -660,11 +803,13 @@ func (c *Client) requestWithHeaders(ctx context.Context, method, path, businessI
 		}
 		resp, sendErr := client.Do(req)
 		if sendErr != nil {
+			// Mutation outcome may be unknown; read failures are returned without automatic retry.
 			lastErr = sendErr
 			if !mutation || attempt == attempts {
 				return nil, &TransportError{Err: sendErr, RequestID: correlationID, IdempotencyKey: key}
 			}
 		} else {
+			// Read one byte beyond the safety limit so oversized responses are detectable.
 			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, (2<<20)+1))
 			resp.Body.Close()
 			if readErr != nil {
@@ -697,9 +842,11 @@ func (c *Client) requestWithHeaders(ctx context.Context, method, path, businessI
 				if !mutation || !apiErr.Retryable || attempt == attempts {
 					return nil, apiErr
 				}
+				// Only authoritative retryable mutation errors continue to another attempt.
 			}
 		}
 		c.log("request_retry", map[string]any{"attempt": attempt, "request_id": correlationID, "idempotency_key": key})
+		// Full jitter with exponential growth avoids synchronized retry bursts.
 		delay := time.Duration(rand.Int63n(int64(minDuration(2*time.Second, 100*time.Millisecond*time.Duration(1<<(attempt-1)))) + 1))
 		select {
 		case <-ctx.Done():
@@ -711,6 +858,7 @@ func (c *Client) requestWithHeaders(ctx context.Context, method, path, businessI
 }
 
 func decodeAPIError(status int, body Response) *APIError {
+	// HTTP_ERROR is a forward-compatible fallback when the server omits a valid envelope.
 	e := &APIError{Status: status, Code: ErrorCode("HTTP_ERROR"), Message: fmt.Sprintf("HTTP %d", status), Details: map[string]any{}}
 	if raw, ok := body["error"].(map[string]any); ok {
 		if v, ok := raw["code"].(string); ok {

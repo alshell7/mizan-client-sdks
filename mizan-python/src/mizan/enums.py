@@ -2,18 +2,71 @@
 from enum import Enum
 
 class StrEnum(str, Enum):
+    """Python 3.10-compatible string enum whose wire value is returned by ``str()``."""
     def __str__(self) -> str: return str(self.value)
 
-class PlanId(StrEnum): START="start"; GROWTH="growth"; COMMAND="command"
-class BillingTerm(StrEnum): MONTHLY="monthly"; QUARTERLY="quarterly"; SEMI_ANNUAL="semi_annual"; ANNUAL="annual"
-class Currency(StrEnum): SAR="SAR"
-class PaymentStatus(StrEnum): CONFIRMED="confirmed"; FAILED="failed"
-class RefundStatus(StrEnum): CONFIRMED="confirmed"
-class BudgetMetric(StrEnum): AZEER_UNIT_MILLIS="azeer_unit_millis"; MONEY_MINOR="money_minor"; QUANTITY="quantity"
-class BudgetPeriod(StrEnum): SUBSCRIPTION_MONTH="subscription_month"
-class BudgetAction(StrEnum): ALERT="alert"; PAUSE="pause"
-class Channel(StrEnum): WHATSAPP="whatsapp"; INSTAGRAM="instagram"; FACEBOOK="facebook"; TIKTOK="tiktok"; TELEPHONY="telephony"; WEBCHAT="webchat"
+class PlanId(StrEnum):
+    """Immutable public catalog plan template."""
+    START = "start"
+    GROWTH = "growth"
+    COMMAND = "command"
+
+
+class BillingTerm(StrEnum):
+    """Paid subscription period and catalog discount selection."""
+    MONTHLY = "monthly"          # One anchored subscription month; no term discount.
+    QUARTERLY = "quarterly"      # Three months with monthly included-unit grants.
+    SEMI_ANNUAL = "semi_annual"  # Six months with monthly included-unit grants.
+    ANNUAL = "annual"            # Twelve months; all included units are granted up front.
+
+
+class Currency(StrEnum):
+    """ISO settlement currency accepted by the Mizan v1 contract."""
+    SAR = "SAR"
+
+
+class PaymentStatus(StrEnum):
+    """Trusted outcome of a uniquely identified payment event."""
+    CONFIRMED = "confirmed"  # Exact paid totals are required and reconciled.
+    FAILED = "failed"        # Renewal failure moves the subscription to past due.
+
+
+class RefundStatus(StrEnum):
+    """Trusted outcome of a uniquely identified refund event."""
+    CONFIRMED = "confirmed"
+
+
+class BudgetMetric(StrEnum):
+    """Exact value accumulated by a feature budget."""
+    AZEER_UNIT_MILLIS = "azeer_unit_millis"  # Platform-credit spend in milliunits.
+    MONEY_MINOR = "money_minor"              # Provider-wallet spend in halala.
+    QUANTITY = "quantity"                    # Normalized event quantity in thousandths.
+
+
+class BudgetPeriod(StrEnum):
+    """Lifecycle window in which a feature budget resets."""
+    SUBSCRIPTION_MONTH = "subscription_month"  # Anchored to activation, not calendar month.
+
+
+class BudgetAction(StrEnum):
+    """Whether crossing a feature limit alerts or rejects usage."""
+    ALERT = "alert"  # Commit crossing usage and emit warning/breach notifications.
+    PAUSE = "pause"  # Reject the crossing request and keep the feature paused.
+
+
+class Channel(StrEnum):
+    """Application channel attribution stored with a usage decision."""
+    WHATSAPP = "whatsapp"
+    INSTAGRAM = "instagram"
+    FACEBOOK = "facebook"
+    TIKTOK = "tiktok"
+    TELEPHONY = "telephony"
+    WEBCHAT = "webchat"
+
+
 class Capability(StrEnum):
+    """Entitlement key frozen into a subscription snapshot."""
+    # Capability values answer entitlement questions; they are not metering feature codes.
     WHATSAPP_NUMBER_1="whatsapp_number_1"; INSTAGRAM_ACCOUNT_1="instagram_account_1"; WEBSITE_WIDGET="website_widget"
     VOIP="voip"; IVR="ivr"; CALL_RECORDING_30D="call_recording_30d"; CALL_MONITORING="call_monitoring"
     AI_CALL_SUMMARY="ai_call_summary"; UNIFIED_INBOX="unified_inbox"; MOBILE_APP="mobile_app"; AI_AGENT_BUILDER="ai_agent_builder"
@@ -30,12 +83,21 @@ class Capability(StrEnum):
     ADVANCED_ATTRIBUTE_TYPES="advanced_attribute_types"; CUSTOM_AUTOMATION_RULES="custom_automation_rules"; RBAC_AUDIT="rbac_audit"
     WHITE_LABEL="white_label"; LOCAL_HOSTING="local_hosting"
 class FeatureCode(StrEnum):
-    CONVERSATION_24H="conversation_24h"; OUTBOUND_DELIVERED_MESSAGE="outbound_delivered_message"
-    AI_ASSIST_ACTION_OVER_ALLOWANCE="ai_assist_action_over_allowance"; VOICE_AI_STARTED_MINUTE="voice_ai_started_minute"
-    AI_REPLY_HANDLING="ai_reply_handling"; WHATSAPP_META_MARKETING_MSG="whatsapp_meta_marketing_msg"
-    TELEPHONY_VOICE_MINUTE="telephony_voice_minute"; INBOUND_VOICE_MINUTE="inbound_voice_minute"
-    OTHER_PROVIDER_CHARGE="other_provider_charge"
+    """Versioned feature metering and pricing contract."""
+    CONVERSATION_24H = "conversation_24h"  # Fixed conversation windows priced in Azeer Units.
+    OUTBOUND_DELIVERED_MESSAGE = "outbound_delivered_message"  # Product delivery only; provider fee is separate.
+    AI_ASSIST_ACTION_OVER_ALLOWANCE = "ai_assist_action_over_allowance"  # Caller establishes allowance exhaustion.
+    VOICE_AI_STARTED_MINUTE = "voice_ai_started_minute"  # Raw seconds rounded up by Mizan.
+    AI_REPLY_HANDLING = "ai_reply_handling"  # Included audit/fair-use event in the default catalog.
+    WHATSAPP_META_MARKETING_MSG = "whatsapp_meta_marketing_msg"  # Meta provider tariff and event ID required.
+    TELEPHONY_VOICE_MINUTE = "telephony_voice_minute"  # Provider-normalized outbound minutes.
+    INBOUND_VOICE_MINUTE = "inbound_voice_minute"  # Attributed inbound minutes; default is zero-rated.
+    OTHER_PROVIDER_CHARGE = "other_provider_charge"  # Exact pass-through provider amount in halala.
+
+
 class RecurringAddonCode(StrEnum):
+    """Catalog-backed recurring subscription add-on."""
+    # Quote-priced members still require approved quote evidence in the request.
     WHATSAPP_011_LANDLINE="whatsapp_011_landline"; WHATSAPP_05_MOBILE="whatsapp_05_mobile"
     CONCURRENT_CALLS_5="concurrent_calls_5"; CONCURRENT_CALLS_10="concurrent_calls_10"; CONCURRENT_CALLS_20="concurrent_calls_20"
     AUTO_DIALER="auto_dialer"; CSAT_START="csat_start"; INSTAGRAM_ADDITIONAL_ACCOUNTS="instagram_additional_accounts"
@@ -43,6 +105,8 @@ class RecurringAddonCode(StrEnum):
     OUTBOUND_MINUTE_BUNDLE_500="outbound_minute_bundle_500"; OUTBOUND_MINUTE_BUNDLE_1000="outbound_minute_bundle_1000"
     VOICE_BROADCAST="voice_broadcast"; RECORDING_RETENTION_EXTENDED="recording_retention_extended"
 class ErrorCode(StrEnum):
+    """Stable machine-readable API rejection or decision code."""
+    # Callers should branch on these values, never on human-readable error messages.
     ACCOUNT_INACTIVE="ACCOUNT_INACTIVE"; DEPENDENCY_TEMPORARILY_UNAVAILABLE="DEPENDENCY_TEMPORARILY_UNAVAILABLE"
     DUPLICATE_PAYMENT_EVENT="DUPLICATE_PAYMENT_EVENT"; DUPLICATE_PROVIDER_EVENT="DUPLICATE_PROVIDER_EVENT"; DUPLICATE_SOURCE_EVENT="DUPLICATE_SOURCE_EVENT"
     EARLY_RENEWAL_EVENT="EARLY_RENEWAL_EVENT"; FEATURE_DISABLED="FEATURE_DISABLED"; FEATURE_PAUSED_BUDGET="FEATURE_PAUSED_BUDGET"

@@ -1,3 +1,10 @@
+"""Synchronous server-side clients for the public and admin Mizan APIs.
+
+The clients preserve exact string amounts and never calculate billing decisions.
+Mutation retries reuse the same encoded body and idempotency key so an uncertain
+transport outcome cannot become a second financial command.
+"""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
+# Builders validate feature-specific facts before the transport layer sees a request.
 from . import builders as usage_builders
 from ._version import __version__
 from .enums import Capability, FeatureCode
@@ -42,7 +50,9 @@ from .models import (
     UsageMetadata,
 )
 
+# Injectable transport seam used by tests and applications with custom networking.
 Transport = Callable[[Request, float], tuple[int, Mapping[str, str], bytes]]
+# Structured lifecycle logger; the client never includes its bearer token in fields.
 Logger = Callable[[str, Mapping[str, Any]], None]
 
 
@@ -76,6 +86,7 @@ class MizanAPIError(MizanError):
         self.request_id = request_id
         self.idempotency_key = idempotency_key
 
+# Each subclass maps one stable wire code to a directly catchable Python exception.
 class AccountInactiveError(MizanAPIError): pass
 class DependencyTemporarilyUnavailableError(MizanAPIError): pass
 class DuplicatePaymentEventError(MizanAPIError): pass
@@ -105,6 +116,7 @@ class SubscriptionChangePendingError(MizanAPIError): pass
 class SubscriptionInactiveError(MizanAPIError): pass
 class UnauthorizedError(MizanAPIError): pass
 
+# Maps stable wire codes to catchable subclasses while preserving the common error fields.
 _API_ERROR_TYPES = {
     "ACCOUNT_INACTIVE": AccountInactiveError, "DEPENDENCY_TEMPORARILY_UNAVAILABLE": DependencyTemporarilyUnavailableError,
     "DUPLICATE_PAYMENT_EVENT": DuplicatePaymentEventError, "DUPLICATE_PROVIDER_EVENT": DuplicateProviderEventError,
@@ -145,6 +157,7 @@ class MizanProtocolError(MizanError):
 
 
 def _default_transport(request: Request, timeout: float) -> tuple[int, Mapping[str, str], bytes]:
+    """Execute one request and return HTTP errors as normal responses for envelope parsing."""
     try:
         with urlopen(request, timeout=timeout) as response:
             return response.status, dict(response.headers), response.read(2_097_153)
@@ -153,12 +166,19 @@ def _default_transport(request: Request, timeout: float) -> tuple[int, Mapping[s
 
 
 def _header(headers: Mapping[str, str], name: str) -> str | None:
+    """Look up an HTTP header case-insensitively across custom transport mappings."""
     expected = name.lower()
     return next((value for key, value in headers.items() if key.lower() == expected), None)
 
 
 class MizanClient:
-    """Thread-safe, calculation-free client for the authoritative Mizan API."""
+    """Thread-safe, calculation-free client for the authoritative Mizan API.
+
+    ``base_url`` must be absolute HTTP(S); ``token`` is a server credential.
+    ``max_attempts`` applies automatic retries only to mutations, always using
+    the original serialized body and idempotency key. Do not mutate client
+    configuration while other threads are using it.
+    """
 
     def __init__(
         self,
@@ -178,6 +198,7 @@ class MizanClient:
         if timeout <= 0 or max_attempts < 1:
             raise ValueError("timeout must be positive and max_attempts must be at least one")
         self.base_url = base_url.rstrip("/")
+        # Configuration is immutable by convention after construction for safe shared use.
         self.token = token
         self.timeout = timeout
         self.max_attempts = max_attempts
@@ -213,18 +234,22 @@ class MizanClient:
         return cast(RefundResponse, self._request("POST", self._business_path(business_id, "provider-balance/refunds"), request, business_id, idempotency_key))
 
     def set_feature_budget(self, business_id: str, feature_code: FeatureCode, request: BudgetRequest, *, idempotency_key: str | None = None) -> BudgetResponse:
+        """Replace one feature's subscription-month alert or pause budget."""
         path = self._business_path(business_id, f"features/{quote(feature_code, safe='')}/budget")
         return cast(BudgetResponse, self._request("PUT", path, request, business_id, idempotency_key))
 
     def check_eligibility(self, business_id: str, feature_code: FeatureCode, request: EligibilityRequest) -> EligibilityResponse:
+        """Preview a charge without reserving balance or changing billing state."""
         path = self._business_path(business_id, f"features/{quote(feature_code, safe='')}/eligibility")
         return cast(EligibilityResponse, self._request("POST", path, request, business_id, None, mutation=False))
 
     def get_entitlement(self, business_id: str, capability: Capability) -> EntitlementResponse:
+        """Check a capability in the active immutable subscription snapshot."""
         path = self._business_path(business_id, f"entitlements/{quote(capability, safe='')}")
         return cast(EntitlementResponse, self._request("GET", path, None, business_id, None, mutation=False))
 
     def get_catalog(self) -> CatalogResponse:
+        """Return current plans, prices, versions, and allowed contract values."""
         return cast(CatalogResponse, self._request("GET", "/v1/catalog", None, "", None, mutation=False))
 
     def consume(self, business_id: str, request: ConsumptionRequest, *, idempotency_key: str | None = None) -> ConsumptionResponse:
@@ -315,6 +340,7 @@ class MizanClient:
     def consume_ai_assist_over_allowance(self, business_id: str, *, source_event_id: str, occurred_at: str,
                                          quantity: str = "1", metadata: UsageMetadata | None = None,
                                          idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Compatibility alias for :meth:`consume_ai_assist_action_over_allowance`."""
         return self.consume_ai_assist_action_over_allowance(
             business_id, source_event_id=source_event_id, occurred_at=occurred_at,
             quantity=quantity, metadata=metadata, idempotency_key=idempotency_key)
@@ -322,6 +348,7 @@ class MizanClient:
     def consume_voice_ai(self, business_id: str, *, source_event_id: str, occurred_at: str,
                          duration_seconds: str, metadata: UsageMetadata | None = None,
                          idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Compatibility alias for :meth:`consume_voice_ai_started_minute`."""
         return self.consume_voice_ai_started_minute(
             business_id, source_event_id=source_event_id, occurred_at=occurred_at,
             duration_seconds=duration_seconds, metadata=metadata, idempotency_key=idempotency_key)
@@ -330,6 +357,7 @@ class MizanClient:
                                 provider: str, provider_event_id: str, billable_minutes: str = "1",
                                 metadata: UsageMetadata | None = None,
                                 idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Compatibility alias for :meth:`consume_telephony_voice_minute`."""
         return self.consume_telephony_voice_minute(
             business_id, source_event_id=source_event_id, occurred_at=occurred_at,
             provider=provider, provider_event_id=provider_event_id, billable_minutes=billable_minutes,
@@ -339,15 +367,18 @@ class MizanClient:
                               provider: str, provider_event_id: str, billable_minutes: str = "1",
                               metadata: UsageMetadata | None = None,
                               idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Compatibility alias for :meth:`consume_inbound_voice_minute`."""
         return self.consume_inbound_voice_minute(
             business_id, source_event_id=source_event_id, occurred_at=occurred_at,
             provider=provider, provider_event_id=provider_event_id, billable_minutes=billable_minutes,
             metadata=metadata, idempotency_key=idempotency_key)
 
     def get_billing_summary(self, business_id: str) -> BillingSummaryResponse:
+        """Return account, subscription, balances, lots, budgets, and replication state."""
         return cast(BillingSummaryResponse, self._request("GET", self._business_path(business_id, "billing-summary"), None, business_id, None, mutation=False))
 
     def get_ledger(self, business_id: str, *, after_sequence: int = 0, limit: int = 50) -> LedgerResponse:
+        """Return up to ``limit`` immutable entries strictly after a business sequence."""
         if after_sequence < 0 or not 1 <= limit <= 100:
             raise ValueError("after_sequence must be non-negative and limit must be 1..100")
         query = urlencode({"after_sequence": after_sequence, "limit": limit})
@@ -369,11 +400,13 @@ class MizanClient:
         mutation: bool = True,
         extra_headers: Mapping[str, str] | None = None,
     ) -> ApiResponse:
+        # Generate replay identity once; every retry below reuses both key and encoded bytes.
         key = idempotency_key or (str(uuid.uuid4()) if mutation else None)
         correlation_id = str(uuid.uuid4())
         encoded = json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode() if body is not None else None
         last_error: BaseException | None = None
         for attempt in range(1, self.max_attempts + 1):
+            # Timestamp changes per transport attempt; body, key, and correlation ID do not.
             headers = {
                 "Authorization": f"Bearer {self.token}",
                 "Accept": "application/json",
@@ -391,6 +424,7 @@ class MizanClient:
             request = Request(self.base_url + path, data=encoded, headers=headers, method=method)
             try:
                 status, response_headers, raw = self._transport(request, self.timeout)
+                # Bound memory and parsing exposure before decoding an untrusted response.
                 if len(raw) > 2_097_152:
                     raise MizanProtocolError("Mizan response exceeded the 2 MiB safety limit", request_id=correlation_id, idempotency_key=key)
                 try:
@@ -417,8 +451,10 @@ class MizanClient:
                 )
                 if not mutation or not api_error.retryable or attempt == self.max_attempts:
                     raise api_error
+                # Only an authoritative retryable mutation error reaches the next attempt.
                 last_error = api_error
             except (URLError, TimeoutError, OSError) as exc:
+                # A mutation transport failure is uncertain; a read is not automatically retried.
                 last_error = exc
                 if not mutation or attempt == self.max_attempts:
                     raise MizanTransportError(
@@ -427,6 +463,7 @@ class MizanClient:
                         idempotency_key=key,
                     ) from exc
             self._log("request_retry", {"attempt": attempt, "request_id": correlation_id, "idempotency_key": key})
+            # Full jitter with a two-second cap avoids synchronized client retry bursts.
             time.sleep(random.uniform(0, min(2.0, 0.1 * (2 ** (attempt - 1)))))
         raise MizanTransportError("Request outcome is unknown", request_id=correlation_id, idempotency_key=key) from last_error
 

@@ -10,8 +10,11 @@ from typing import Any, Awaitable, Callable, Literal, Mapping, TypeAlias, TypedD
 
 from .models import ExactAmount
 
+# Stable delivery identity; persist this value to suppress at-least-once duplicates.
 OUTBOX_ID_HEADER = "x-mizan-outbox-id"
+# Ledger receivers emit this header only after durable application success.
 ACK_SEQUENCE_HEADER = "x-mizan-ack-sequence"
+# Default protects framework adapters from unbounded request bodies.
 DEFAULT_MAX_BODY_BYTES = 1 << 20
 
 LedgerEntryType: TypeAlias = Literal[
@@ -50,6 +53,7 @@ NotificationType: TypeAlias = Literal[
 
 
 class LedgerEntryWebhook(TypedDict):
+    """Immutable business-ledger entry with versioned effective-time metadata."""
     id: str
     entry_type: LedgerEntryType
     source_command: str
@@ -63,6 +67,7 @@ class LedgerEntryWebhook(TypedDict):
 
 
 class LedgerPostingWebhook(TypedDict, total=False):
+    """One exact debit or credit; postings balance independently per rail and unit."""
     rail: Literal["azeer_units", "provider_balance", "invoice"]
     account_code: str
     amount: ExactAmount
@@ -72,6 +77,7 @@ class LedgerPostingWebhook(TypedDict, total=False):
 
 
 class LedgerWebhook(TypedDict):
+    """Strictly ordered ledger delivery; deduplicate by outbox ID and event ID."""
     event_id: str
     business_id: str
     business_sequence: int
@@ -80,6 +86,7 @@ class LedgerWebhook(TypedDict):
 
 
 class NotificationWebhook(TypedDict, total=False):
+    """At-least-once operational notification without ledger ordering semantics."""
     type: NotificationType
     business_id: str
     feature_code: str
@@ -104,6 +111,7 @@ class WebhookContext:
 
 @dataclass(frozen=True)
 class WebhookResponse:
+    """Framework-neutral HTTP response returned by :class:`WebhookReceiver`."""
     status_code: int
     headers: Mapping[str, str]
     body: bytes = b""
@@ -111,6 +119,7 @@ class WebhookResponse:
 
 LedgerCallback: TypeAlias = Callable[[LedgerWebhook, WebhookContext], None | Awaitable[None]]
 NotificationCallback: TypeAlias = Callable[[NotificationWebhook, WebhookContext], None | Awaitable[None]]
+# Framework-neutral input supports raw bytes/strings and already-decoded test integrations.
 WebhookPayload: TypeAlias = bytes | bytearray | str | Mapping[str, Any]
 
 
@@ -149,6 +158,7 @@ class WebhookReceiver:
         """
 
         normalized_headers = {str(name).lower(): str(value) for name, value in headers.items()}
+        # Authenticate before parsing so unauthorized callers cannot exercise the JSON contract.
         if not self._authorized(normalized_headers.get("authorization")):
             return _error_response(401, "webhook authorization failed")
         outbox_id = normalized_headers.get(OUTBOX_ID_HEADER, "").strip()
@@ -159,10 +169,12 @@ class WebhookReceiver:
             raw_body, decoded = _decode_payload(payload, self._max_body_bytes)
         except _PayloadError as error:
             return _error_response(error.status_code, str(error))
+        # Never forward the bearer credential to application callbacks or logging code.
         callback_headers = {name: value for name, value in normalized_headers.items() if name != "authorization"}
         context = WebhookContext(outbox_id=outbox_id, headers=callback_headers, raw_body=raw_body)
 
         if "business_sequence" in decoded:
+            # Ledger shape takes precedence and requires ordered acknowledgement after callback success.
             try:
                 event = _validate_ledger(decoded)
             except ValueError as error:
@@ -176,6 +188,7 @@ class WebhookReceiver:
             return WebhookResponse(204, {ACK_SEQUENCE_HEADER: str(event["business_sequence"])})
 
         if "type" in decoded:
+            # Notifications are deduplicated by outbox ID but do not acknowledge a ledger sequence.
             try:
                 notification = _validate_notification(decoded)
             except ValueError as error:
@@ -193,6 +206,7 @@ class WebhookReceiver:
     def _authorized(self, authorization: str | None) -> bool:
         if self._bearer_token is None:
             return True
+        # Constant-time comparison avoids leaking a configured bearer token by timing.
         return authorization is not None and hmac.compare_digest(
             authorization.encode("utf-8"), f"Bearer {self._bearer_token}".encode("utf-8")
         )
@@ -205,6 +219,7 @@ class _PayloadError(ValueError):
 
 
 def _decode_payload(payload: WebhookPayload, limit: int) -> tuple[bytes, dict[str, Any]]:
+    """Normalize supported payload forms while preserving exact raw bytes for callbacks."""
     if isinstance(payload, Mapping):
         raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         decoded: Any = dict(payload)
@@ -223,6 +238,7 @@ def _decode_payload(payload: WebhookPayload, limit: int) -> tuple[bytes, dict[st
     return raw, cast(dict[str, Any], decoded)
 
 
+# Closed entry vocabulary prevents silently accepting a ledger reason the SDK cannot interpret.
 _LEDGER_TYPES = {
     "subscription_activated", "subscription_change_scheduled", "subscription_cancellation_scheduled",
     "subscription_cancelled", "subscription_cancellation_revoked", "renewal_failed",
@@ -236,6 +252,7 @@ _LEDGER_TYPES = {
 
 
 def _validate_ledger(payload: dict[str, Any]) -> LedgerWebhook:
+    """Validate ledger identity, exact postings, and independent rail/unit balance."""
     event_id = payload.get("event_id")
     business_id = payload.get("business_id")
     sequence = payload.get("business_sequence")
@@ -266,6 +283,7 @@ def _validate_ledger(payload: dict[str, Any]) -> LedgerWebhook:
         if not isinstance(posting.get("account_code"), str) or not posting["account_code"] or not _canonical_integer(amount):
             raise ValueError("ledger posting amounts must be exact integer strings")
         key = (rail, unit)
+        # Money and unit rails must each balance independently to zero.
         balances[key] = balances.get(key, 0) + int(cast(str, amount))
     if any(balance != 0 for balance in balances.values()):
         raise ValueError("ledger postings must balance to zero per rail and unit")
@@ -273,6 +291,7 @@ def _validate_ledger(payload: dict[str, Any]) -> LedgerWebhook:
 
 
 def _validate_notification(payload: dict[str, Any]) -> NotificationWebhook:
+    """Validate type-dependent notification fields and exact threshold amounts."""
     event_type = payload.get("type")
     if not isinstance(payload.get("business_id"), str) or not payload["business_id"]:
         raise ValueError("notification business_id and feature_code are required")
@@ -292,6 +311,7 @@ def _validate_notification(payload: dict[str, Any]) -> NotificationWebhook:
 
 
 def _canonical_integer(value: Any) -> bool:
+    """Accept only canonical signed-int64 strings without leading zeroes."""
     if not isinstance(value, str) or not value:
         return False
     canonical = _unsigned_canonical_digits(value[1:]) if value.startswith("-") else _unsigned_canonical_digits(value)
@@ -299,6 +319,7 @@ def _canonical_integer(value: Any) -> bool:
 
 
 def _unsigned_canonical_integer(value: Any) -> bool:
+    """Accept only canonical non-negative int64 strings."""
     return isinstance(value, str) and _unsigned_canonical_digits(value) and int(value) <= 2**63 - 1
 
 

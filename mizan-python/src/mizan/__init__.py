@@ -1,10 +1,20 @@
+"""Public Mizan SDK surface.
+
+Imports from this module are stable application-facing contracts. Private
+transport and validation helpers remain in their implementation modules.
+"""
+
+# Package version used in the User-Agent and release metadata.
 from ._version import __version__
+# Validated constructors for feature-specific wire requests.
 from .builders import (ai_assist_action_over_allowance, ai_reply_handling, confirmed_refund,
     confirmed_top_up, conversation_24h, feature_budget, inbound_voice_minute,
     other_provider_charge, outbound_delivered_message, telephony_voice_minute,
     voice_ai_started_minute, whatsapp_meta_marketing_message)
+# Closed wire vocabularies prevent callers from guessing API strings.
 from .enums import (BillingTerm, BudgetAction, BudgetMetric, BudgetPeriod, Capability, Channel, Currency,
     ErrorCode, FeatureCode, PaymentStatus, PlanId, RecurringAddonCode, RefundStatus, values)
+# Public/admin clients and the three error-outcome families.
 from .client import MizanAdminClient, MizanAPIError, MizanClient, MizanError, MizanProtocolError, MizanTransportError
 from .models import (
     AIAssistActionOverAllowanceConsumptionRequest,

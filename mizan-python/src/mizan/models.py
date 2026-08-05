@@ -10,9 +10,11 @@ from __future__ import annotations
 from typing import Any, Literal, TypeAlias, TypedDict
 from .enums import BillingTerm, BudgetAction, BudgetMetric, Capability, Channel, Currency, FeatureCode, PaymentStatus, PlanId, RecurringAddonCode, RefundStatus
 
+# Exact API numbers remain canonical decimal strings at the JSON boundary.
 ExactAmount: TypeAlias = str
 
 
+# Private optional-field mixins preserve TypedDict required/optional precision for IntelliSense.
 class _RecurringAddonOptional(TypedDict, total=False):
     quantity: ExactAmount
     approved_quote_id: str
@@ -20,6 +22,7 @@ class _RecurringAddonOptional(TypedDict, total=False):
 
 
 class RecurringAddon(_RecurringAddonOptional):
+    """Catalog add-on selection; quote pricing also requires approved quote fields."""
     code: RecurringAddonCode
 
 
@@ -29,6 +32,7 @@ class _ServiceLineOptional(TypedDict, total=False):
 
 
 class ServiceLine(_ServiceLineOptional):
+    """Exact, optional invoice service line in halala."""
     code: str
     amount_minor: ExactAmount
 
@@ -42,6 +46,7 @@ class _ActivationOptional(TypedDict, total=False):
 
 
 class ActivationRequest(_ActivationOptional):
+    """First-period activation using exactly one plan ID and a confirmed exact payment."""
     catalog_version: str
     term: BillingTerm
     seats: int
@@ -62,10 +67,12 @@ class _SubscriptionChangeOptional(TypedDict, total=False):
 
 
 class SubscriptionChangeRequest(_SubscriptionChangeOptional):
+    """Catalog-backed change scheduled for renewal; the active period is not prorated."""
     catalog_version: str
 
 
 class CancellationRequest(TypedDict, total=False):
+    """Request period-end cancellation; ``event_id`` may identify the caller's command."""
     event_id: str
     reason: str
 
@@ -76,11 +83,13 @@ class _RenewalOptional(TypedDict, total=False):
 
 
 class RenewalEventRequest(_RenewalOptional):
+    """Unique confirmed or failed renewal payment event."""
     payment_event_id: str
     payment_status: PaymentStatus
 
 
 class ConfirmedTopUp(TypedDict):
+    """Confirmed funding in halala; ``paid_total_minor`` includes VAT."""
     amount_minor: ExactAmount
     payment_event_id: str
     payment_status: PaymentStatus
@@ -89,6 +98,7 @@ class ConfirmedTopUp(TypedDict):
 
 
 class ProviderRefundRequest(TypedDict):
+    """Confirmed provider-wallet refund recorded as compensating immutable history."""
     amount_minor: ExactAmount
     payment_event_id: str
     refund_status: RefundStatus
@@ -105,6 +115,7 @@ class _BudgetOptional(TypedDict, total=False):
 
 
 class BudgetRequest(_BudgetOptional):
+    """One feature's exact subscription-month limit, action, and optional reserve."""
     metric: BudgetMetric
     period: Literal["subscription_month"]
     limit: ExactAmount
@@ -112,27 +123,34 @@ class BudgetRequest(_BudgetOptional):
 
 
 class _CommonUsageMetadata(TypedDict, total=False):
+    # Application actor and channel attribution used for reconciliation.
     actor: dict[str, str]
     channel: Channel
     channel_account_id: str
     conversation_id: str
     campaign_id: str
+    # Preserve both provider measurement and normalized tariff quantity when applicable.
     raw_quantity: str
     billable_quantity: str
+    # Provider invoice and pre-conversion evidence; values remain exact strings.
     provider_invoice_id: str
     original_amount_minor: ExactAmount
     original_currency: str
+    # Versioned rules explain how the caller normalized provider facts.
     fx_rule: str
     tariff_version: str
+    # At most 32 bounded scalar application facts; never include secrets or raw payloads.
     attributes: dict[str, str | int | float | bool | None]
 
 
 class _OptionalProviderAttribution(TypedDict, total=False):
+    # Required by provider-priced features and optional elsewhere.
     provider: str
     provider_event_id: str
 
 
 class _RequiredProviderAttribution(TypedDict):
+    # Financial source and provider-side deduplication boundary.
     provider: str
     provider_event_id: str
 
@@ -154,6 +172,8 @@ class ProviderUsageMetadata(_CommonUsageMetadata, _RequiredProviderAttribution):
 
 
 class ChargeInput(TypedDict, total=False):
+    # Fields are mutually feature-dependent; use a feature-specific builder when possible.
+    """Feature-dependent exact charge facts used by eligibility and consumption."""
     quantity: ExactAmount
     duration_seconds: ExactAmount
     provider_amount_minor: ExactAmount
@@ -161,6 +181,7 @@ class ChargeInput(TypedDict, total=False):
 
 
 class ConsumptionComponent(ChargeInput):
+    """One unique feature charge within an atomic multi-feature source event."""
     feature_code: FeatureCode
 
 
@@ -242,6 +263,7 @@ class MultiFeatureConsumptionRequest(_UsageEventRequired, _MultiFeatureOptional)
     components: list[ConsumptionComponent]
 
 
+# Closed union lets type checkers narrow request fields from each literal feature code.
 ConsumptionRequest: TypeAlias = (
     Conversation24HConsumptionRequest
     | OutboundDeliveredMessageConsumptionRequest
@@ -257,21 +279,25 @@ ConsumptionRequest: TypeAlias = (
 
 
 class EligibilityRequest(ChargeInput, total=False):
+    """Advisory charge preview; it reserves no funds and changes no state."""
     components: list[ConsumptionComponent]
 
 
 class BaseEnvelope(TypedDict):
+    """Version metadata included in every successful business API response."""
     api_version: str
     catalog_version: str
     policy_version: str
 
 
 class Balance(TypedDict):
+    """Post-transaction exact balances in Azeer milliunits and provider halala."""
     azeer_unit_millis: ExactAmount
     provider_balance_minor: ExactAmount
 
 
 class InvoiceLine(TypedDict, total=False):
+    """Immutable invoice line with independently rounded VAT amounts in halala."""
     code: str
     quantity: ExactAmount
     net_minor: ExactAmount
@@ -286,6 +312,7 @@ class InvoiceLine(TypedDict, total=False):
 
 
 class Invoice(TypedDict):
+    """Authoritatively calculated exact subscription invoice."""
     id: str
     currency: str
     eligible_gross_minor: ExactAmount
@@ -297,6 +324,7 @@ class Invoice(TypedDict):
 
 
 class ActivationResult(TypedDict):
+    """Committed first subscription period, invoice, initial grant, and ledger link."""
     subscription_id: str
     cycle_id: str
     status: Literal["active"]
@@ -386,6 +414,7 @@ class BudgetResponse(BaseEnvelope):
 
 
 class EligibilityResult(TypedDict, total=False):
+    """Short-lived advisory result; a later consumption repeats every check."""
     eligible: bool
     reason: str
     details: dict[str, Any]
@@ -397,6 +426,7 @@ class EligibilityResponse(BaseEnvelope):
 
 
 class EntitlementResult(TypedDict, total=False):
+    """Capability decision from the active immutable subscription snapshot."""
     capability: Capability
     enabled: bool
     plan_id: str
@@ -409,14 +439,19 @@ class EntitlementResponse(BaseEnvelope):
 
 class ConsumptionResult(TypedDict, total=False):
     """Committed decision. Exact values remain decimal strings."""
+    # True only when every component and related record committed atomically.
     accepted: bool
+    # Stable authoritative decision code; never parse a human-readable message instead.
     code: str
     source_event_id: str
+    # Immutable financial-history link and per-business replication cursor.
     ledger_entry_id: str
     business_sequence: int
+    # Normalized charges and exact Azeer lot allocations for each feature component.
     charges: list[dict[str, Any]]
     allocations_by_feature: list[dict[str, Any]]
     totals: dict[str, ExactAmount]
+    # Post-transaction balances, not advisory eligibility projections.
     balances: Balance
     details: dict[str, Any]
 
@@ -447,6 +482,7 @@ class DeliveryEndpoint(TypedDict, total=False):
 
 
 class DeliveryConfigurationResult(TypedDict):
+    """Effective delivery endpoints and whether both required kinds are enabled."""
     scope: Literal["business", "global"]
     ready: bool
     endpoints: list[DeliveryEndpoint | None]
@@ -461,6 +497,7 @@ class ConsumptionResponse(BaseEnvelope):
 
 
 class BillingSummaryResult(TypedDict, total=False):
+    """Current billing view for customer screens, support, and reconciliation."""
     business_id: str
     account: dict[str, Any]
     subscription: dict[str, Any] | None
@@ -476,6 +513,7 @@ class BillingSummaryResponse(BaseEnvelope):
 
 
 class LedgerResult(TypedDict):
+    """Business-sequence page of immutable ledger entries."""
     entries: list[dict[str, Any]]
     next_after_sequence: int | None
 
@@ -485,6 +523,7 @@ class LedgerResponse(BaseEnvelope):
 
 
 class CatalogResponse(TypedDict):
+    """Current commercial versions, templates, feature prices, and wire vocabularies."""
     catalog_version: str
     policy_version: str
     plans: dict[str, dict[str, Any]]
@@ -495,4 +534,5 @@ class CatalogResponse(TypedDict):
     contract_values: dict[str, list[str]]
 
 
+# Internal transport envelope used where the caller has not selected a typed response yet.
 ApiResponse: TypeAlias = dict[str, Any]

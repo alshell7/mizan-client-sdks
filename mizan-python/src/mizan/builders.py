@@ -24,18 +24,23 @@ from .models import (AIAssistActionOverAllowanceConsumptionRequest,
                      VoiceAIStartedMinuteConsumptionRequest,
                      WhatsAppMetaMarketingMessageConsumptionRequest)
 
+# The Worker persists exact quantities in the positive signed-int64 domain.
 _MAX_INT64 = 9_223_372_036_854_775_807
+# Integer contracts reject signs, whitespace, exponent notation, and decimal points.
 _INTEGER = re.compile(r"^\d+$")
+# Count/minute contracts accept up to milli precision and never round caller facts.
 _DECIMAL = re.compile(r"^(\d+)(?:\.(\d{1,3}))?$")
 
 
 def confirmed_top_up(*, amount_minor: str, payment_event_id: str, paid_total_minor: str) -> ConfirmedTopUp:
+    """Build confirmed SAR funding; ``paid_total_minor`` must include VAT."""
     return {"amount_minor": amount_minor, "payment_event_id": payment_event_id,
             "payment_status": PaymentStatus.CONFIRMED, "currency": Currency.SAR,
             "paid_total_minor": paid_total_minor}
 
 
 def confirmed_refund(*, amount_minor: str, payment_event_id: str, reason: str) -> ProviderRefundRequest:
+    """Build a confirmed SAR provider-wallet refund with a reconciliation reason."""
     return {"amount_minor": amount_minor, "payment_event_id": payment_event_id, "reason": reason,
             "refund_status": RefundStatus.CONFIRMED, "currency": Currency.SAR,
             "refunded_total_minor": amount_minor}
@@ -43,16 +48,19 @@ def confirmed_refund(*, amount_minor: str, payment_event_id: str, reason: str) -
 
 def feature_budget(*, metric: BudgetMetric, limit: str, action: BudgetAction,
                    warning_bps: int = 8000, sensitive: bool = False) -> BudgetRequest:
+    """Build a subscription-month feature budget with an exact non-negative limit."""
     return {"metric": metric, "period": BudgetPeriod.SUBSCRIPTION_MONTH.value,
             "limit": limit, "warning_bps": warning_bps, "action": action, "sensitive": sensitive}
 
 
 def _event(source_event_id: str, occurred_at: str) -> None:
+    """Validate the application dedupe key and timezone-aware event time."""
     if not isinstance(source_event_id, str) or not 1 <= len(source_event_id) <= 128:
         raise ValueError("source_event_id must contain 1 to 128 characters")
     if not isinstance(occurred_at, str):
         raise ValueError("occurred_at must be an ISO-8601 timestamp with a timezone")
     try:
+        # Python 3.10 does not accept a trailing Z, so normalize it to UTC offset syntax.
         value = datetime.fromisoformat(occurred_at.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError("occurred_at must be an ISO-8601 timestamp with a timezone") from exc
@@ -61,16 +69,19 @@ def _event(source_event_id: str, occurred_at: str) -> None:
 
 
 def _quantity(value: str) -> None:
+    """Validate an exact positive decimal and its scaled int64 representation."""
     match = _DECIMAL.fullmatch(value) if isinstance(value, str) else None
     if not match:
         raise ValueError("quantity must be a positive decimal string with at most 3 decimal places")
     fraction = (match.group(2) or "").ljust(3, "0")
+    # Scale with integers to mirror the Worker's parseDecimal implementation exactly.
     scaled = int(match.group(1)) * 1_000 + int(fraction or "0")
     if not 0 < scaled <= _MAX_INT64:
         raise ValueError("quantity must be positive and fit the supported exact range")
 
 
 def _integer(value: str, field: str, *, allow_zero: bool = False) -> None:
+    """Validate a canonical unsigned integer fact without numeric coercion."""
     if not isinstance(value, str) or not _INTEGER.fullmatch(value):
         raise ValueError(f"{field} must be a non-negative integer string")
     parsed = int(value)
@@ -80,6 +91,7 @@ def _integer(value: str, field: str, *, allow_zero: bool = False) -> None:
 
 
 def _validate_metadata(metadata: UsageMetadata | ProviderUsageMetadata | None) -> None:
+    """Bound optional attribution to the Worker's small scalar metadata contract."""
     if metadata is None:
         return
     channel = metadata.get("channel")
@@ -89,6 +101,7 @@ def _validate_metadata(metadata: UsageMetadata | ProviderUsageMetadata | None) -
     if not isinstance(attributes, dict) or len(attributes) > 32:
         raise ValueError("metadata.attributes must be an object with at most 32 entries")
     for key, value in attributes.items():
+        # Metadata is reconciliation context, not an unrestricted provider-payload store.
         if not isinstance(key, str) or len(key) > 64 or value is not None and not isinstance(value, (str, int, float, bool)):
             raise ValueError("metadata.attributes contains an invalid key or scalar value")
         if value is not None and len(str(value)) > 512:
@@ -99,6 +112,7 @@ def _validate_metadata(metadata: UsageMetadata | ProviderUsageMetadata | None) -
 
 def _count_usage(feature_code: FeatureCode, *, source_event_id: str, occurred_at: str,
                  quantity: str, metadata: UsageMetadata | ProviderUsageMetadata | None) -> dict[str, Any]:
+    """Build the shared wire shape only after every local fact has passed validation."""
     _event(source_event_id, occurred_at)
     _quantity(quantity)
     _validate_metadata(metadata)
@@ -111,12 +125,14 @@ def _count_usage(feature_code: FeatureCode, *, source_event_id: str, occurred_at
 
 def _provider_metadata(*, provider: str, provider_event_id: str,
                        metadata: UsageMetadata | None = None) -> ProviderUsageMetadata:
+    """Merge required provider attribution over optional caller metadata."""
     _validate_metadata(metadata)
     if not isinstance(provider, str) or not provider.strip():
         raise ValueError("provider is required for provider-priced usage")
     if not isinstance(provider_event_id, str) or not provider_event_id.strip():
         raise ValueError("provider_event_id is required for provider-priced usage")
     result = dict(metadata or {})
+    # Required arguments win over conflicting optional metadata to keep attribution canonical.
     result["provider"] = provider.strip()
     result["provider_event_id"] = provider_event_id.strip()
     return cast(ProviderUsageMetadata, result)

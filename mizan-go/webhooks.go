@@ -13,8 +13,11 @@ import (
 )
 
 const (
-	HeaderOutboxID          = "X-Mizan-Outbox-Id"
-	HeaderAckSequence       = "X-Mizan-Ack-Sequence"
+	// HeaderOutboxID is stable across retries and is the receiver deduplication key.
+	HeaderOutboxID = "X-Mizan-Outbox-Id"
+	// HeaderAckSequence acknowledges durable application of exactly one ledger sequence.
+	HeaderAckSequence = "X-Mizan-Ack-Sequence"
+	// defaultWebhookBodyLimit bounds memory use when callers do not configure a limit.
 	defaultWebhookBodyLimit = 1 << 20
 )
 
@@ -47,6 +50,7 @@ const (
 	LedgerOutboxRetryRequested              LedgerEntryType = "outbox_retry_requested"
 )
 
+// NotificationType identifies a non-ledger operational notification.
 type NotificationType string
 
 const (
@@ -57,6 +61,7 @@ const (
 	NotificationFeatureResumedManual NotificationType = "feature_resumed_manual"
 )
 
+// LedgerEntryWebhook is immutable financial history with versioned effective-time metadata.
 type LedgerEntryWebhook struct {
 	ID             string          `json:"id"`
 	EntryType      LedgerEntryType `json:"entry_type"`
@@ -70,6 +75,7 @@ type LedgerEntryWebhook struct {
 	Metadata       json.RawMessage `json:"metadata"`
 }
 
+// LedgerPostingWebhook is one exact debit or credit. Postings balance per rail and unit.
 type LedgerPostingWebhook struct {
 	Rail        string          `json:"rail"`
 	AccountCode string          `json:"account_code"`
@@ -79,6 +85,7 @@ type LedgerPostingWebhook struct {
 	Metadata    json.RawMessage `json:"metadata,omitempty"`
 }
 
+// LedgerWebhook is delivered strictly by BusinessSequence and at least once.
 type LedgerWebhook struct {
 	EventID          string                 `json:"event_id"`
 	BusinessID       string                 `json:"business_id"`
@@ -87,6 +94,7 @@ type LedgerWebhook struct {
 	Postings         []LedgerPostingWebhook `json:"postings"`
 }
 
+// NotificationWebhook is an at-least-once budget or feature-state notification.
 type NotificationWebhook struct {
 	Type        NotificationType `json:"type"`
 	BusinessID  string           `json:"business_id"`
@@ -99,9 +107,12 @@ type NotificationWebhook struct {
 // WebhookContext contains transport identity. OutboxID is stable across retries
 // and is the primary key applications should persist for duplicate suppression.
 type WebhookContext struct {
+	// OutboxID is stable across retries and should be persisted before returning success.
 	OutboxID string
-	Headers  http.Header
-	RawBody  []byte
+	// Headers excludes Authorization so application callbacks cannot leak the bearer token.
+	Headers http.Header
+	// RawBody is a defensive copy of the exact received JSON bytes.
+	RawBody []byte
 }
 
 // WebhookHandler receives validated events. Returning nil means the application
@@ -112,11 +123,13 @@ type WebhookHandler interface {
 	HandleNotification(context.Context, NotificationWebhook, WebhookContext) error
 }
 
+// WebhookHandlerFuncs adapts two functions to WebhookHandler.
 type WebhookHandlerFuncs struct {
 	Ledger       func(context.Context, LedgerWebhook, WebhookContext) error
 	Notification func(context.Context, NotificationWebhook, WebhookContext) error
 }
 
+// HandleLedger dispatches to Ledger and returns an error when it is not configured.
 func (h WebhookHandlerFuncs) HandleLedger(ctx context.Context, event LedgerWebhook, delivery WebhookContext) error {
 	if h.Ledger == nil {
 		return errors.New("mizan: ledger webhook handler is not configured")
@@ -124,6 +137,7 @@ func (h WebhookHandlerFuncs) HandleLedger(ctx context.Context, event LedgerWebho
 	return h.Ledger(ctx, event, delivery)
 }
 
+// HandleNotification dispatches to Notification and returns an error when it is not configured.
 func (h WebhookHandlerFuncs) HandleNotification(ctx context.Context, event NotificationWebhook, delivery WebhookContext) error {
 	if h.Notification == nil {
 		return errors.New("mizan: notification webhook handler is not configured")
@@ -139,6 +153,7 @@ type WebhookResponse struct {
 	Body       []byte
 }
 
+// WriteHTTP writes the framework-neutral status, headers, and body to net/http.
 func (r WebhookResponse) WriteHTTP(w http.ResponseWriter) {
 	for name, values := range r.Headers {
 		for _, value := range values {
@@ -157,8 +172,10 @@ type WebhookReceiver struct {
 	MaxBodyBytes int
 }
 
+// ServeHTTP receives both webhook streams as a standard net/http handler.
 func (r WebhookReceiver) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	limit := r.bodyLimit()
+	// Read one bounded body before delegating to the framework-neutral receiver.
 	body, err := readBoundedBody(request, limit)
 	if err != nil {
 		r.errorResponse(http.StatusRequestEntityTooLarge, "request body exceeds the configured limit").WriteHTTP(w)
@@ -187,13 +204,16 @@ func (r WebhookReceiver) Receive(ctx context.Context, headers http.Header, body 
 	}
 
 	var envelope map[string]json.RawMessage
+	// Decode only the top-level keys first so stream type can be selected safely.
 	if err := json.Unmarshal(body, &envelope); err != nil || envelope == nil {
 		return r.errorResponse(http.StatusBadRequest, "request body must be a JSON object")
 	}
 	callbackHeaders := headers.Clone()
+	// Never expose the bearer credential to application handlers or their logs.
 	callbackHeaders.Del("Authorization")
 	delivery := WebhookContext{OutboxID: outboxID, Headers: callbackHeaders, RawBody: append([]byte(nil), body...)}
 	if _, ledger := envelope["business_sequence"]; ledger {
+		// Ledger shape takes precedence and is acknowledged only after handler success.
 		var event LedgerWebhook
 		if err := json.Unmarshal(body, &event); err != nil {
 			return r.errorResponse(http.StatusUnprocessableEntity, "ledger webhook does not match the contract")
@@ -207,6 +227,7 @@ func (r WebhookReceiver) Receive(ctx context.Context, headers http.Header, body 
 		return WebhookResponse{StatusCode: http.StatusNoContent, Headers: http.Header{HeaderAckSequence: []string{fmt.Sprint(event.BusinessSequence)}}}
 	}
 	if _, notification := envelope["type"]; notification {
+		// Notifications use outbox deduplication but have no sequence acknowledgement.
 		var event NotificationWebhook
 		if err := json.Unmarshal(body, &event); err != nil {
 			return r.errorResponse(http.StatusUnprocessableEntity, "notification webhook does not match the contract")
@@ -234,6 +255,7 @@ func (r WebhookReceiver) authorized(value string) bool {
 		return true
 	}
 	expected := "Bearer " + r.BearerToken
+	// Equal-length constant-time comparison avoids token-dependent timing differences.
 	return len(value) == len(expected) && subtle.ConstantTimeCompare([]byte(value), []byte(expected)) == 1
 }
 
@@ -262,6 +284,7 @@ func validateLedgerWebhook(event LedgerWebhook) error {
 			return errors.New("ledger posting amounts must be exact integer strings")
 		}
 		key := posting.Rail + "\x00" + posting.Unit
+		// Rail and unit form separate balancing domains; money cannot offset milliunits.
 		if balances[key] == nil {
 			balances[key] = new(big.Int)
 		}
@@ -340,6 +363,7 @@ func isUnsignedExactAmount(value string) bool {
 
 func readBoundedBody(request *http.Request, limit int) ([]byte, error) {
 	defer request.Body.Close()
+	// Read one extra byte so the exact limit and an oversized body are distinguishable.
 	body, err := io.ReadAll(io.LimitReader(request.Body, int64(limit)+1))
 	if err != nil {
 		return nil, err

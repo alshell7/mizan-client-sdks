@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+# This adapter is packaged behind the optional ``fastapi`` dependency extra.
 from fastapi import Request, Response
 
 from .webhooks import WebhookReceiver
@@ -16,6 +17,7 @@ def webhook_endpoint(receiver: WebhookReceiver) -> Callable[[Request], Any]:
     """Create an async FastAPI endpoint for both webhook streams."""
 
     async def endpoint(request: Request) -> Response:
+        # Pass raw bytes so limits and callback evidence match every framework adapter.
         response = await receiver.receive(request.headers, await request.body())
         return Response(
             content=response.body,
@@ -30,4 +32,3 @@ def mount_webhooks(app: Any, receiver: WebhookReceiver, path: str = "/mizan/webh
     """Mount the receiver on a FastAPI application or APIRouter."""
 
     app.add_api_route(path, webhook_endpoint(receiver), methods=["POST"], include_in_schema=False)
-

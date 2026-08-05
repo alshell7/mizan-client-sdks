@@ -4,6 +4,7 @@ package mizan
 type Capability string
 
 const (
+	// These values are entitlement switches from plan snapshots, not billable FeatureCodes.
 	CapabilityWhatsAppNumber1         Capability = "whatsapp_number_1"
 	CapabilityInstagramAccount1       Capability = "instagram_account_1"
 	CapabilityWebsiteWidget           Capability = "website_widget"
@@ -56,13 +57,20 @@ const (
 	CapabilityLocalHosting            Capability = "local_hosting"
 )
 
+// AllPlanIDs returns a new slice of SDK-known public plan IDs.
 func AllPlanIDs() []PlanID { return []PlanID{PlanStart, PlanGrowth, PlanCommand} }
+
+// AllBillingTerms returns a new slice of SDK-known billing terms.
 func AllBillingTerms() []BillingTerm {
 	return []BillingTerm{TermMonthly, TermQuarterly, TermSemiAnnual, TermAnnual}
 }
+
+// AllFeatureCodes returns a new slice of SDK-known metering contracts.
 func AllFeatureCodes() []FeatureCode {
 	return []FeatureCode{FeatureConversation24H, FeatureOutboundDeliveredMessage, FeatureAIAssistOverAllowance, FeatureVoiceAIStartedMinute, FeatureAIReplyHandling, FeatureWhatsAppMetaMarketingMessage, FeatureTelephonyVoiceMinute, FeatureInboundVoiceMinute, FeatureOtherProviderCharge}
 }
+
+// AllChannels returns a new slice of SDK-known usage-attribution channels.
 func AllChannels() []Channel {
 	return []Channel{ChannelWhatsApp, ChannelInstagram, ChannelFacebook, ChannelTikTok, ChannelTelephony, ChannelWebchat}
 }
