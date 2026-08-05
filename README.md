@@ -35,8 +35,8 @@ expose global and per-business delivery configuration without mixing admin crede
 ## Feature-specific consumption
 
 Every catalog feature has a distinct exported Python `TypedDict`, Go struct, validated builder/method, and test
-case. Quantity-based contracts default to `"1"`; duration and pass-through amount contracts never invent a
-quantity.
+case. Count-priced contracts accept only whole positive quantities and default to `"1"`; provider-normalized
+telephony minutes retain milli precision. Duration and pass-through amount contracts never invent a quantity.
 
 | Feature code | Python contract | Go contract |
 |---|---|---|

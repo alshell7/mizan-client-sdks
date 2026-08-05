@@ -56,6 +56,12 @@ Transport = Callable[[Request, float], tuple[int, Mapping[str, str], bytes]]
 Logger = Callable[[str, Mapping[str, Any]], None]
 
 
+def _validate_payment_event_request(request: Mapping[str, Any]) -> None:
+    payment_event_id = request.get("payment_event_id")
+    if not isinstance(payment_event_id, str) or not 1 <= len(payment_event_id) <= 128:
+        raise ValueError("payment_event_id must contain 1 to 128 characters")
+
+
 class MizanError(Exception):
     """Base SDK error."""
 
@@ -207,6 +213,9 @@ class MizanClient:
 
     def activate_subscription(self, business_id: str, request: ActivationRequest, *, idempotency_key: str | None = None) -> ActivationResponse:
         """Activate and pay for the first subscription period."""
+        _validate_payment_event_request(request)
+        if "services" in request:
+            raise ValueError("caller-defined activation services are not supported")
         return cast(ActivationResponse, self._request("POST", self._business_path(business_id, "subscriptions/activate"), request, business_id, idempotency_key))
 
     def change_subscription(self, business_id: str, request: SubscriptionChangeRequest, *, idempotency_key: str | None = None) -> ChangeResponse:
@@ -219,18 +228,25 @@ class MizanClient:
 
     def apply_renewal_event(self, business_id: str, request: RenewalEventRequest, *, idempotency_key: str | None = None) -> RenewalResponse:
         """Apply a uniquely identified confirmed or failed renewal payment event."""
+        _validate_payment_event_request(request)
         return cast(RenewalResponse, self._request("POST", self._business_path(business_id, "subscriptions/renewal-events"), request, business_id, idempotency_key))
 
     def top_up_azeer_units(self, business_id: str, request: ConfirmedTopUp, *, idempotency_key: str | None = None) -> TopUpResponse:
         """Purchase expiring Azeer Units from a confirmed payment."""
+        _validate_payment_event_request(request)
         return cast(TopUpResponse, self._request("POST", self._business_path(business_id, "azeer-units/top-ups"), request, business_id, idempotency_key))
 
     def top_up_provider_balance(self, business_id: str, request: ConfirmedTopUp, *, idempotency_key: str | None = None) -> TopUpResponse:
         """Fund the Provider Fees Balance from a confirmed payment."""
+        _validate_payment_event_request(request)
         return cast(TopUpResponse, self._request("POST", self._business_path(business_id, "provider-balance/top-ups"), request, business_id, idempotency_key))
 
     def refund_provider_balance(self, business_id: str, request: ProviderRefundRequest, *, idempotency_key: str | None = None) -> RefundResponse:
         """Apply a confirmed provider-balance refund."""
+        _validate_payment_event_request(request)
+        reason = request.get("reason")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 1_000:
+            raise ValueError("reason must contain 1 to 1000 characters")
         return cast(RefundResponse, self._request("POST", self._business_path(business_id, "provider-balance/refunds"), request, business_id, idempotency_key))
 
     def set_feature_budget(self, business_id: str, feature_code: FeatureCode, request: BudgetRequest, *, idempotency_key: str | None = None) -> BudgetResponse:
@@ -476,21 +492,20 @@ class MizanAdminClient(MizanClient):
     """Admin-scoped client for global and per-business delivery configuration.
 
     Use a dedicated Admin Worker token. Every mutation is attributed to ``actor``
-    and ``role`` and must include a human-readable ``reason`` in its request body.
+    and must include a human-readable ``reason``. The server derives role from the token.
     """
 
     def __init__(self, base_url: str, token: str, *, actor: str,
-                 role: str = "billing_admin", **kwargs: Any) -> None:
+                 role: str | None = None, **kwargs: Any) -> None:
         super().__init__(base_url, token, **kwargs)
         if not actor:
             raise ValueError("actor is required")
-        if role not in {"billing_admin", "finance_admin", "support_admin"}:
-            raise ValueError("role must be billing_admin, finance_admin, or support_admin")
         self.actor = actor
+        # Compatibility-only keyword; caller role claims are never sent.
         self.role = role
 
     def _admin_headers(self) -> Mapping[str, str]:
-        return {"X-Admin-Actor": self.actor, "X-Admin-Role": self.role}
+        return {"X-Admin-Actor": self.actor}
 
     def get_global_delivery_endpoints(self) -> DeliveryConfigurationResponse:
         """Read masked fallbacks used only when a business has no endpoint record."""

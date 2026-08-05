@@ -153,7 +153,8 @@ Mizan does not use JSON floating-point numbers for financial or unit balances.
 |---|---|---|---|
 | `_minor` | Integer halala | `str` / `ExactAmount` | `"75"` = SAR 0.75 |
 | `_millis` | Azeer milliunit | `str` / `ExactAmount` | `"500"` = 0.5 Azeer Unit |
-| quantity | Exact decimal string | `str` | `"1.250"` |
+| count quantity | Positive whole-count string | `str` | `"2"` |
+| provider-normalized minutes | Exact decimal string | `str` | `"1.250"` |
 | `_bps` | Basis points | `int` | `1500` = 15% |
 
 Use `decimal.Decimal` for UI conversion when needed. Never pass exact values through `float`.
@@ -686,6 +687,7 @@ from mizan import confirmed_refund
 
 refund = confirmed_refund(
     amount_minor="1000",
+    refunded_total_minor="1150",
     payment_event_id="provider-refund-001",
     reason="Unused provider funds",
 )
@@ -697,7 +699,8 @@ client.refund_provider_balance(
 )
 ```
 
-A refund creates an immutable reversal. It does not edit the original top-up.
+A refund creates immutable principal and VAT reversals. `refunded_total_minor` is the confirmed cash refund,
+including VAT; it does not edit the original top-up.
 
 ## Scenario 7: budgets
 

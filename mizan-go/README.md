@@ -49,10 +49,10 @@ Your service supplies facts, such as a confirmed payment or completed billable a
 ## Install
 
 ```bash
-go get github.com/alshell7/mizan-client-sdks/mizan-go@v1.5.0
+go get github.com/alshell7/mizan-client-sdks/mizan-go@v1.6.0
 ```
 
-The module is stored in a repository subdirectory, so repository release tags use `mizan-go/v1.5.0`.
+The module is stored in a repository subdirectory, so repository release tags use `mizan-go/v1.6.0`.
 
 Import it with:
 
@@ -153,7 +153,8 @@ Mizan never relies on JSON floating-point values for financial or unit accountin
 |---|---|---|---|
 | `_minor` | Integer halala | `mizan.ExactAmount` | `"75"` = SAR 0.75 |
 | `_millis` | Azeer milliunit | `mizan.ExactAmount` | `"500"` = 0.5 Azeer Unit |
-| quantity | Exact decimal string | `string` | `"1.250"` |
+| count quantity | Positive whole-count string | `string` | `"2"` |
+| provider-normalized minutes | Exact decimal string | `string` | `"1.250"` |
 | `_bps` | Basis points | `int` | `1500` = 15% |
 
 Do not parse `ExactAmount` through `float64`. Use integer or decimal-safe presentation logic outside the billing request.
@@ -609,7 +610,7 @@ refund := mizan.ProviderRefundRequest{
 	PaymentEventID:     "provider-refund-001",
 	RefundStatus:       mizan.RefundConfirmed,
 	Currency:           mizan.CurrencySAR,
-	RefundedTotalMinor: mizan.ExactAmount("1000"),
+	RefundedTotalMinor: mizan.ExactAmount("1150"),
 	Reason:             "Unused provider funds",
 }
 
@@ -621,7 +622,8 @@ _, err := client.RefundProviderBalance(
 )
 ```
 
-Refunds create immutable reversals; they do not edit original funding entries.
+Refunds create immutable principal and VAT reversals; `RefundedTotalMinor` is the confirmed cash refund including
+VAT. They do not edit original funding entries.
 
 ## Scenario 7: budgets
 

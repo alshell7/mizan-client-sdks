@@ -34,16 +34,25 @@ _DECIMAL = re.compile(r"^(\d+)(?:\.(\d{1,3}))?$")
 
 def confirmed_top_up(*, amount_minor: str, payment_event_id: str, paid_total_minor: str) -> ConfirmedTopUp:
     """Build confirmed SAR funding; ``paid_total_minor`` must include VAT."""
+    _integer(amount_minor, "amount_minor")
+    _integer(paid_total_minor, "paid_total_minor")
+    _payment_event(payment_event_id)
     return {"amount_minor": amount_minor, "payment_event_id": payment_event_id,
             "payment_status": PaymentStatus.CONFIRMED, "currency": Currency.SAR,
             "paid_total_minor": paid_total_minor}
 
 
-def confirmed_refund(*, amount_minor: str, payment_event_id: str, reason: str) -> ProviderRefundRequest:
-    """Build a confirmed SAR provider-wallet refund with a reconciliation reason."""
+def confirmed_refund(*, amount_minor: str, refunded_total_minor: str,
+                     payment_event_id: str, reason: str) -> ProviderRefundRequest:
+    """Build a confirmed refund; total must include the principal's VAT reversal."""
+    _integer(amount_minor, "amount_minor")
+    _integer(refunded_total_minor, "refunded_total_minor")
+    _payment_event(payment_event_id)
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > 1_000:
+        raise ValueError("reason must contain 1 to 1000 characters")
     return {"amount_minor": amount_minor, "payment_event_id": payment_event_id, "reason": reason,
             "refund_status": RefundStatus.CONFIRMED, "currency": Currency.SAR,
-            "refunded_total_minor": amount_minor}
+            "refunded_total_minor": refunded_total_minor}
 
 
 def feature_budget(*, metric: BudgetMetric, limit: str, action: BudgetAction,
@@ -68,6 +77,12 @@ def _event(source_event_id: str, occurred_at: str) -> None:
         raise ValueError("occurred_at must include a timezone")
 
 
+def _payment_event(payment_event_id: str) -> None:
+    """Validate the payment-provider deduplication identifier."""
+    if not isinstance(payment_event_id, str) or not 1 <= len(payment_event_id) <= 128:
+        raise ValueError("payment_event_id must contain 1 to 128 characters")
+
+
 def _quantity(value: str) -> None:
     """Validate an exact positive decimal and its scaled int64 representation."""
     match = _DECIMAL.fullmatch(value) if isinstance(value, str) else None
@@ -78,6 +93,15 @@ def _quantity(value: str) -> None:
     scaled = int(match.group(1)) * 1_000 + int(fraction or "0")
     if not 0 < scaled <= _MAX_INT64:
         raise ValueError("quantity must be positive and fit the supported exact range")
+
+
+def _whole_count(value: str) -> None:
+    """Validate an indivisible event count whose milli representation fits int64."""
+    if not isinstance(value, str) or not _INTEGER.fullmatch(value):
+        raise ValueError("quantity must be a positive whole-count string")
+    parsed = int(value)
+    if not 0 < parsed <= _MAX_INT64 // 1_000:
+        raise ValueError("quantity must be positive and fit the supported exact range after milli scaling")
 
 
 def _integer(value: str, field: str, *, allow_zero: bool = False) -> None:
@@ -94,9 +118,28 @@ def _validate_metadata(metadata: UsageMetadata | ProviderUsageMetadata | None) -
     """Bound optional attribution to the Worker's small scalar metadata contract."""
     if metadata is None:
         return
+    reserved = {"actor", "channel", "channel_account_id", "provider", "provider_event_id",
+                "conversation_id", "campaign_id", "raw_quantity", "billable_quantity",
+                "provider_invoice_id", "original_amount_minor", "original_currency", "fx_rule",
+                "tariff_version", "attributes"}
+    if any(key not in reserved for key in metadata):
+        raise ValueError("custom metadata top-level keys are not supported; use metadata.attributes")
     channel = metadata.get("channel")
     if channel is not None and str(channel) not in {item.value for item in Channel}:
         raise ValueError("metadata.channel is not a supported channel")
+    actor = metadata.get("actor")
+    if actor is not None and (not isinstance(actor, dict) or set(actor) - {"type", "id"}
+                              or actor.get("type") not in {"user", "system", "campaign"}
+                              or not isinstance(actor.get("id"), str) or not 1 <= len(actor["id"]) <= 128):
+        raise ValueError("metadata.actor requires a supported type and bounded id")
+    for field in ("channel_account_id", "provider", "provider_event_id", "conversation_id", "campaign_id",
+                  "raw_quantity", "billable_quantity", "provider_invoice_id", "original_currency", "fx_rule",
+                  "tariff_version"):
+        value = metadata.get(field)
+        if value is not None and (not isinstance(value, str) or not 1 <= len(value) <= 512):
+            raise ValueError(f"metadata.{field} must contain 1 to 512 characters")
+    if metadata.get("original_amount_minor") is not None:
+        _integer(str(metadata["original_amount_minor"]), "metadata.original_amount_minor", allow_zero=True)
     attributes = metadata.get("attributes", {})
     if not isinstance(attributes, dict) or len(attributes) > 32:
         raise ValueError("metadata.attributes must be an object with at most 32 entries")
@@ -111,10 +154,11 @@ def _validate_metadata(metadata: UsageMetadata | ProviderUsageMetadata | None) -
 
 
 def _count_usage(feature_code: FeatureCode, *, source_event_id: str, occurred_at: str,
-                 quantity: str, metadata: UsageMetadata | ProviderUsageMetadata | None) -> dict[str, Any]:
+                 quantity: str, metadata: UsageMetadata | ProviderUsageMetadata | None,
+                 whole_count: bool = True) -> dict[str, Any]:
     """Build the shared wire shape only after every local fact has passed validation."""
     _event(source_event_id, occurred_at)
-    _quantity(quantity)
+    (_whole_count if whole_count else _quantity)(quantity)
     _validate_metadata(metadata)
     request: dict[str, Any] = {"source_event_id": source_event_id, "occurred_at": occurred_at,
                                "feature_code": feature_code, "quantity": quantity}
@@ -201,7 +245,7 @@ def telephony_voice_minute(*, source_event_id: str, occurred_at: str, provider: 
     provider_metadata = _provider_metadata(provider=provider, provider_event_id=provider_event_id, metadata=metadata)
     return cast(TelephonyVoiceMinuteConsumptionRequest, _count_usage(
         FeatureCode.TELEPHONY_VOICE_MINUTE, source_event_id=source_event_id,
-        occurred_at=occurred_at, quantity=billable_minutes, metadata=provider_metadata))
+        occurred_at=occurred_at, quantity=billable_minutes, metadata=provider_metadata, whole_count=False))
 
 
 def inbound_voice_minute(*, source_event_id: str, occurred_at: str, provider: str,
@@ -211,7 +255,7 @@ def inbound_voice_minute(*, source_event_id: str, occurred_at: str, provider: st
     provider_metadata = _provider_metadata(provider=provider, provider_event_id=provider_event_id, metadata=metadata)
     return cast(InboundVoiceMinuteConsumptionRequest, _count_usage(
         FeatureCode.INBOUND_VOICE_MINUTE, source_event_id=source_event_id,
-        occurred_at=occurred_at, quantity=billable_minutes, metadata=provider_metadata))
+        occurred_at=occurred_at, quantity=billable_minutes, metadata=provider_metadata, whole_count=False))
 
 
 def other_provider_charge(*, source_event_id: str, occurred_at: str, provider: str,

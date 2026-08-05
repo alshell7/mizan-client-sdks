@@ -26,23 +26,11 @@ class RecurringAddon(_RecurringAddonOptional):
     code: RecurringAddonCode
 
 
-class _ServiceLineOptional(TypedDict, total=False):
-    quantity: ExactAmount
-    taxable: bool
-
-
-class ServiceLine(_ServiceLineOptional):
-    """Exact, optional invoice service line in halala."""
-    code: str
-    amount_minor: ExactAmount
-
-
 class _ActivationOptional(TypedDict, total=False):
     plan_id: PlanId
     plan_configuration_id: str
     timezone: str
     addons: list[RecurringAddon]
-    services: list[ServiceLine]
 
 
 class ActivationRequest(_ActivationOptional):
@@ -391,7 +379,7 @@ class TopUpResponse(BaseEnvelope):
 
 
 class RefundResult(TypedDict):
-    refunded_minor: ExactAmount
+    refund: dict[str, ExactAmount]
     balance_after_minor: ExactAmount
     ledger_entry_id: str
 

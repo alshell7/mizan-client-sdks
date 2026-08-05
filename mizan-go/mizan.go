@@ -16,7 +16,7 @@ import (
 )
 
 // Version is the SDK version sent in the HTTP User-Agent header.
-const Version = "1.5.0"
+const Version = "1.6.0"
 
 // ExactAmount is an exact base-10 integer string. Money uses halala and Azeer
 // Units use milliunits; never construct these values through float64 arithmetic.
@@ -358,7 +358,6 @@ type ActivationRequest struct {
 	// PaidTotalMinor is the trusted payment total including VAT in halala.
 	PaidTotalMinor ExactAmount      `json:"paid_total_minor"`
 	Addons         []RecurringAddon `json:"addons,omitempty"`
-	Services       []map[string]any `json:"services,omitempty"`
 }
 
 // SubscriptionChangeRequest schedules a catalog-backed change at renewal; v1 does not prorate.
@@ -599,7 +598,9 @@ func NewClient(baseURL, token string) (*Client, error) {
 type AdminClient struct {
 	*Client
 	Actor string
-	Role  string
+	// Role is retained for source compatibility but ignored. The Admin Worker
+	// derives authorization from the matched role-specific credential.
+	Role string
 }
 
 // NewAdminClient creates an attributed billing_admin client using a dedicated admin token.
@@ -611,17 +612,14 @@ func NewAdminClient(baseURL, token, actor string) (*AdminClient, error) {
 	if actor == "" {
 		return nil, errors.New("mizan: admin actor is required")
 	}
-	return &AdminClient{Client: client, Actor: actor, Role: "billing_admin"}, nil
+	return &AdminClient{Client: client, Actor: actor}, nil
 }
 
 func (c *AdminClient) headers() (map[string]string, error) {
 	if c.Actor == "" {
 		return nil, errors.New("mizan: admin actor is required")
 	}
-	if c.Role != "billing_admin" && c.Role != "finance_admin" && c.Role != "support_admin" {
-		return nil, errors.New("mizan: admin role must be billing_admin, finance_admin, or support_admin")
-	}
-	return map[string]string{"X-Admin-Actor": c.Actor, "X-Admin-Role": c.Role}, nil
+	return map[string]string{"X-Admin-Actor": c.Actor}, nil
 }
 
 // GetGlobalDeliveryEndpoints reads masked fallbacks used when no business row exists.
@@ -677,6 +675,9 @@ func (c *AdminClient) ConfigureBusinessDeliveryEndpoint(ctx context.Context, bus
 
 // ActivateSubscription validates payment against the exact invoice and creates the first period.
 func (c *Client) ActivateSubscription(ctx context.Context, businessID string, in ActivationRequest, idempotencyKey string) (Response, error) {
+	if err := validatePaymentEventID(in.PaymentEventID); err != nil {
+		return nil, err
+	}
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "subscriptions/activate"), businessID, in, idempotencyKey)
 }
 
@@ -692,21 +693,36 @@ func (c *Client) CancelSubscription(ctx context.Context, businessID string, in C
 
 // ApplyRenewalEvent records a unique renewal payment outcome and applies any pending change.
 func (c *Client) ApplyRenewalEvent(ctx context.Context, businessID string, in RenewalEventRequest, idempotencyKey string) (Response, error) {
+	if err := validatePaymentEventID(in.PaymentEventID); err != nil {
+		return nil, err
+	}
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "subscriptions/renewal-events"), businessID, in, idempotencyKey)
 }
 
 // TopUpAzeerUnits purchases a separately expiring exact Azeer Unit lot.
 func (c *Client) TopUpAzeerUnits(ctx context.Context, businessID string, in ConfirmedTopUp, idempotencyKey string) (Response, error) {
+	if err := validatePaymentRequest(in.PaymentEventID, in.AmountMinor, in.PaidTotalMinor); err != nil {
+		return nil, err
+	}
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "azeer-units/top-ups"), businessID, in, idempotencyKey)
 }
 
 // TopUpProviderBalance funds exact prepaid third-party costs in halala.
 func (c *Client) TopUpProviderBalance(ctx context.Context, businessID string, in ConfirmedTopUp, idempotencyKey string) (Response, error) {
+	if err := validatePaymentRequest(in.PaymentEventID, in.AmountMinor, in.PaidTotalMinor); err != nil {
+		return nil, err
+	}
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "provider-balance/top-ups"), businessID, in, idempotencyKey)
 }
 
 // RefundProviderBalance records a confirmed refund as compensating ledger history.
 func (c *Client) RefundProviderBalance(ctx context.Context, businessID string, in ProviderRefundRequest, idempotencyKey string) (Response, error) {
+	if err := validatePaymentRequest(in.PaymentEventID, in.AmountMinor, in.RefundedTotalMinor); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(in.Reason) == "" || len(in.Reason) > 1000 {
+		return nil, errors.New("mizan: refund reason must contain 1 to 1000 characters")
+	}
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "provider-balance/refunds"), businessID, in, idempotencyKey)
 }
 

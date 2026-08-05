@@ -374,6 +374,10 @@ func TestFeatureSpecificConsumptionRejectsInvalidInputsBeforeHTTP(t *testing.T) 
 			_, err := client.ConsumeOutboundDeliveredMessage(ctx, "business-1", OutboundDeliveredMessageUsage{SourceEventID: "x", OccurredAt: now, Quantity: "1.0001"}, "x")
 			return err
 		}},
+		{"fractional count", func() error {
+			_, err := client.ConsumeOutboundDeliveredMessage(ctx, "business-1", OutboundDeliveredMessageUsage{SourceEventID: "x", OccurredAt: now, Quantity: "1.5"}, "x")
+			return err
+		}},
 		{"missing source", func() error {
 			_, err := client.ConsumeAIReplyHandling(ctx, "business-1", AIReplyHandlingUsage{OccurredAt: now}, "x")
 			return err
@@ -436,6 +440,14 @@ func TestFeatureExactBoundariesMatchWorkerContract(t *testing.T) {
 	if err := validateExactInteger("9223372036854775808", "amount", true); err == nil {
 		t.Fatal("overflowing exact amount accepted")
 	}
+	if err := validateWholeCount("9223372036854775"); err != nil {
+		t.Fatalf("maximum whole count rejected: %v", err)
+	}
+	for _, quantity := range []ExactAmount{"0", "1.5", "9223372036854776"} {
+		if err := validateWholeCount(quantity); err == nil {
+			t.Fatalf("invalid whole count %s accepted", quantity)
+		}
+	}
 }
 
 func TestFeatureREADMEReferencesRealContractsAndMethods(t *testing.T) {
@@ -473,9 +485,9 @@ func TestFeatureREADMEReferencesRealContractsAndMethods(t *testing.T) {
 }
 
 func TestAdminClientDeliveryConfiguration(t *testing.T) {
-	var path, actor, key string
+	var path, actor, role, key string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path, actor, key = r.URL.Path, r.Header.Get("X-Admin-Actor"), r.Header.Get("Idempotency-Key")
+		path, actor, role, key = r.URL.Path, r.Header.Get("X-Admin-Actor"), r.Header.Get("X-Admin-Role"), r.Header.Get("Idempotency-Key")
 		_, _ = w.Write([]byte(`{"data":{"ready":true,"endpoints":[]}}`))
 	}))
 	defer server.Close()
@@ -491,7 +503,24 @@ func TestAdminClientDeliveryConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if path != "/admin/api/delivery-endpoints/ledger" || actor != "ops@example.com" || key != "global-ledger-v1" {
-		t.Fatalf("unexpected admin request path=%q actor=%q key=%q", path, actor, key)
+	if path != "/admin/api/delivery-endpoints/ledger" || actor != "ops@example.com" || role != "" || key != "global-ledger-v1" {
+		t.Fatalf("unexpected admin request path=%q actor=%q role=%q key=%q", path, actor, role, key)
+	}
+}
+
+func TestFinancialRequestsRejectInvalidProviderEvidenceBeforeNetwork(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests++ }))
+	defer server.Close()
+	client, err := NewClient(server.URL, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.RefundProviderBalance(context.Background(), "business-1", ProviderRefundRequest{
+		AmountMinor: "100", PaymentEventID: strings.Repeat("p", 129), RefundStatus: RefundConfirmed,
+		Currency: CurrencySAR, RefundedTotalMinor: "115", Reason: "Unused funds",
+	}, "refund-invalid")
+	if err == nil || requests != 0 {
+		t.Fatalf("expected local validation without network request, err=%v requests=%d", err, requests)
 	}
 }

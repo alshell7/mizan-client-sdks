@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.0 - 2026-08-06
+
+- Require whole positive quantities for count-priced events while preserving exact milli-precision for provider-normalized telephony minutes.
+- Require VAT-inclusive `refunded_total_minor` in the Python refund builder and model refund responses as principal, VAT, and total reversals.
+- Align SDK metadata validation with the server's reserved top-level keys, bounded actor identity, and exact-value limits.
+- Document the hardened current-period event-time, funding, refund, and retry contracts.
+- Stop sending caller-selected admin roles; the server derives role from the role-specific credential.
+- Remove caller-defined activation service lines and bound payment-event identifiers and refund reasons.
+
 ## 1.5.0 - 2026-08-05
 
 - Add framework-neutral, typed webhook receivers for ledger and notification delivery in Go and Python.

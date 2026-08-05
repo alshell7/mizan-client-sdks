@@ -99,6 +99,7 @@ class FeatureBuilderContractTests(unittest.TestCase):
             "zero quantity": lambda: outbound_delivered_message(source_event_id="x", occurred_at=NOW, quantity="0"),
             "negative quantity": lambda: ai_reply_handling(source_event_id="x", occurred_at=NOW, quantity="-1"),
             "too precise": lambda: ai_assist_action_over_allowance(source_event_id="x", occurred_at=NOW, quantity="1.0001"),
+            "fractional count": lambda: outbound_delivered_message(source_event_id="x", occurred_at=NOW, quantity="1.5"),
             "quantity overflow": lambda: conversation_24h(source_event_id="x", occurred_at=NOW,
                                                             quantity="9223372036854775.808"),
             "zero duration": lambda: voice_ai_started_minute(source_event_id="x", occurred_at=NOW, duration_seconds="0"),
@@ -120,6 +121,8 @@ class FeatureBuilderContractTests(unittest.TestCase):
                                                               metadata={"attributes": {str(i): i for i in range(33)}}),
             "non-finite attribute": lambda: conversation_24h(source_event_id="x", occurred_at=NOW,
                                                                metadata={"attributes": {"score": math.inf}}),
+            "unknown top-level metadata": lambda: conversation_24h(source_event_id="x", occurred_at=NOW,
+                                                                      metadata={"custom": "value"}),
         }
         for name, build in cases.items():
             with self.subTest(name=name), self.assertRaises(ValueError):
@@ -127,10 +130,12 @@ class FeatureBuilderContractTests(unittest.TestCase):
 
     def test_exact_boundaries_match_the_worker_contract(self):
         self.assertEqual(conversation_24h(source_event_id="x" * 128, occurred_at=NOW,
-                                          quantity="0.001")["quantity"], "0.001")
+                                          quantity="1")["quantity"], "1")
         self.assertEqual(conversation_24h(source_event_id="max", occurred_at=NOW,
-                                          quantity="9223372036854775.807")["quantity"],
-                         "9223372036854775.807")
+                                          quantity="9223372036854775")["quantity"],
+                         "9223372036854775")
+        self.assertEqual(telephony_voice_minute(source_event_id="minutes", occurred_at=NOW, provider="Carrier",
+                                                provider_event_id="minutes", billable_minutes="0.001")["quantity"], "0.001")
         self.assertEqual(voice_ai_started_minute(source_event_id="duration", occurred_at=NOW,
                                                  duration_seconds="9223372036854775807")["duration_seconds"],
                          "9223372036854775807")

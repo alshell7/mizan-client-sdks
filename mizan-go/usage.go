@@ -132,6 +132,23 @@ func validateUsageEvent(sourceEventID string, occurredAt time.Time) error {
 	return nil
 }
 
+func validatePaymentEventID(paymentEventID string) error {
+	if len(paymentEventID) < 1 || len(paymentEventID) > 128 {
+		return errors.New("mizan: payment event ID must contain 1 to 128 characters")
+	}
+	return nil
+}
+
+func validatePaymentRequest(paymentEventID string, amount, total ExactAmount) error {
+	if err := validatePaymentEventID(paymentEventID); err != nil {
+		return err
+	}
+	if err := validateExactInteger(amount, "amount minor", false); err != nil {
+		return err
+	}
+	return validateExactInteger(total, "confirmed total minor", false)
+}
+
 func validateQuantity(value ExactAmount) error {
 	match := quantityPattern.FindStringSubmatch(string(value))
 	if match == nil {
@@ -146,6 +163,18 @@ func validateQuantity(value ExactAmount) error {
 	}
 	if scaled.Sign() <= 0 || scaled.Cmp(maxInt64Exact) > 0 {
 		return errors.New("mizan: quantity must be positive and fit the supported exact range")
+	}
+	return nil
+}
+
+func validateWholeCount(value ExactAmount) error {
+	if !integerPattern.MatchString(string(value)) {
+		return errors.New("mizan: quantity must be a positive whole-count string")
+	}
+	parsed, _ := new(big.Int).SetString(string(value), 10)
+	maxCount := new(big.Int).Div(new(big.Int).Set(maxInt64Exact), big.NewInt(1000))
+	if parsed.Sign() <= 0 || parsed.Cmp(maxCount) > 0 {
+		return errors.New("mizan: quantity must be positive and fit the supported exact range after milli scaling")
 	}
 	return nil
 }
@@ -175,6 +204,33 @@ func validateMetadata(metadata *UsageMetadata) error {
 		case ChannelWhatsApp, ChannelInstagram, ChannelFacebook, ChannelTikTok, ChannelTelephony, ChannelWebchat:
 		default:
 			return errors.New("mizan: metadata channel is not supported")
+		}
+	}
+	if len(metadata.Actor) > 0 {
+		if len(metadata.Actor) != 2 || metadata.Actor["id"] == "" || len(metadata.Actor["id"]) > 128 {
+			return errors.New("mizan: metadata actor requires exactly type and bounded id")
+		}
+		switch metadata.Actor["type"] {
+		case "user", "system", "campaign":
+		default:
+			return errors.New("mizan: metadata actor type is not supported")
+		}
+	}
+	for field, value := range map[string]string{
+		"channel account ID": metadata.ChannelAccountID, "provider": metadata.Provider,
+		"provider event ID": metadata.ProviderEventID, "conversation ID": metadata.ConversationID,
+		"campaign ID": metadata.CampaignID, "raw quantity": metadata.RawQuantity,
+		"billable quantity": metadata.BillableQuantity, "provider invoice ID": metadata.ProviderInvoiceID,
+		"original currency": metadata.OriginalCurrency, "FX rule": metadata.FXRule,
+		"tariff version": metadata.TariffVersion,
+	} {
+		if value != "" && len(value) > 512 {
+			return fmt.Errorf("mizan: metadata %s must be at most 512 characters", field)
+		}
+	}
+	if metadata.OriginalAmountMinor != "" {
+		if err := validateExactInteger(metadata.OriginalAmountMinor, "metadata original amount minor", true); err != nil {
+			return err
 		}
 	}
 	if len(metadata.Attributes) > 32 {
@@ -229,13 +285,29 @@ func countRequest(feature FeatureCode, sourceEventID string, occurredAt time.Tim
 		return ConsumptionRequest{}, err
 	}
 	quantity = quantityOrOne(quantity)
-	if err := validateQuantity(quantity); err != nil {
+	if err := validateWholeCount(quantity); err != nil {
 		return ConsumptionRequest{}, err
 	}
 	if err := validateMetadata(metadata); err != nil {
 		return ConsumptionRequest{}, err
 	}
 	// Construct wire input only after every local fact has passed validation.
+	return ConsumptionRequest{SourceEventID: sourceEventID, OccurredAt: occurredAt,
+		FeatureCode: feature, Quantity: string(quantity), Metadata: metadata}, nil
+}
+
+func providerQuantityRequest(feature FeatureCode, sourceEventID string, occurredAt time.Time, quantity ExactAmount,
+	metadata *UsageMetadata) (ConsumptionRequest, error) {
+	if err := validateUsageEvent(sourceEventID, occurredAt); err != nil {
+		return ConsumptionRequest{}, err
+	}
+	quantity = quantityOrOne(quantity)
+	if err := validateQuantity(quantity); err != nil {
+		return ConsumptionRequest{}, err
+	}
+	if err := validateMetadata(metadata); err != nil {
+		return ConsumptionRequest{}, err
+	}
 	return ConsumptionRequest{SourceEventID: sourceEventID, OccurredAt: occurredAt,
 		FeatureCode: feature, Quantity: string(quantity), Metadata: metadata}, nil
 }
@@ -310,7 +382,7 @@ func (c *Client) ConsumeTelephonyVoiceMinute(ctx context.Context, businessID str
 	if err != nil {
 		return nil, err
 	}
-	request, err := countRequest(FeatureTelephonyVoiceMinute, in.SourceEventID, in.OccurredAt, in.BillableMinutes, metadata)
+	request, err := providerQuantityRequest(FeatureTelephonyVoiceMinute, in.SourceEventID, in.OccurredAt, in.BillableMinutes, metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +395,7 @@ func (c *Client) ConsumeInboundVoiceMinute(ctx context.Context, businessID strin
 	if err != nil {
 		return nil, err
 	}
-	request, err := countRequest(FeatureInboundVoiceMinute, in.SourceEventID, in.OccurredAt, in.BillableMinutes, metadata)
+	request, err := providerQuantityRequest(FeatureInboundVoiceMinute, in.SourceEventID, in.OccurredAt, in.BillableMinutes, metadata)
 	if err != nil {
 		return nil, err
 	}

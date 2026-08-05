@@ -27,6 +27,7 @@ class ClientTests(unittest.TestCase):
         }, idempotency_key="global-ledger-v1")
         self.assertTrue(requests[0].full_url.endswith("/admin/api/delivery-endpoints/ledger"))
         self.assertEqual(requests[0].get_header("X-admin-actor"), "ops@example.com")
+        self.assertIsNone(requests[0].get_header("X-admin-role"))
         self.assertEqual(requests[0].get_header("Idempotency-key"), "global-ledger-v1")
 
     def test_mutation_retries_with_same_idempotency_key(self):
