@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mizan-billing"
-version = "1.4.0"
+version = "1.5.0"
 description = "Official Python SDK for the Mizan billing and metering API"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,7 +27,8 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["build>=1.2", "mypy>=1.11", "twine>=5"]
+fastapi = ["fastapi>=0.115,<1"]
+dev = ["build>=1.2", "fastapi>=0.115,<1", "httpx>=0.27", "mypy>=1.11", "twine>=5"]
 
 [project.urls]
 Homepage = "https://github.com/alshell7/mizan-client-sdks"

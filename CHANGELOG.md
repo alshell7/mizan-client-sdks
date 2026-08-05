@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0 - 2026-08-05
+
+- Add framework-neutral, typed webhook receivers for ledger and notification delivery in Go and Python.
+- Add Go Fiber v2 middleware and an optional FastAPI endpoint adapter that can be mounted on any application route.
+- Validate bearer authentication, exact amounts, event identity, supported types, and balanced ledger postings before dispatch.
+- Return `X-Mizan-Ack-Sequence` only after ledger application processing succeeds.
+- Document all ledger entry types and the outbox ID, event ID, source event ID, business sequence, deduplication, ordering, retry, and dead-letter contracts.
+
 ## 1.4.0 - 2026-08-04
 
 - Added nine exported feature-specific Python request contracts and nine distinct Go usage structs, one for every catalog feature code.

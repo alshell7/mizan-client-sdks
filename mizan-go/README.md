@@ -14,6 +14,7 @@ It helps you:
 
 ## Contents
 
+- [Receive webhooks with Fiber or any Go HTTP framework](https://github.com/alshell7/mizan-client-sdks/blob/main/WEBHOOKS.md#go-fiber)
 - [How Mizan fits into your service](#how-mizan-fits-into-your-service)
 - [Install](#install)
 - [Configure the client](#configure-the-client)
@@ -48,10 +49,10 @@ Your service supplies facts, such as a confirmed payment or completed billable a
 ## Install
 
 ```bash
-go get github.com/alshell7/mizan-client-sdks/mizan-go@v1.4.0
+go get github.com/alshell7/mizan-client-sdks/mizan-go@v1.5.0
 ```
 
-The module is stored in a repository subdirectory, so repository release tags use `mizan-go/v1.4.0`.
+The module is stored in a repository subdirectory, so repository release tags use `mizan-go/v1.5.0`.
 
 Import it with:
 

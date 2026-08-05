@@ -71,6 +71,7 @@ channel account, conversation, campaign, and small scalar application attributes
 
 - [`mizan-python`](mizan-python/README.md): typed dictionaries, typed response envelopes, standard-library HTTP.
 - [`mizan-go`](mizan-go/README.md): typed request/result structs, contexts, standard-library HTTP.
+- [Webhook consumption guide](WEBHOOKS.md): ledger and notification contracts, identifiers, retries, Go Fiber, and FastAPI.
 - [Publishing guide](PUBLISHING.md): GitHub tags, PyPI trusted publishing, and Go module releases.
 
 CI tests Python 3.10–3.13 and Go 1.22–1.23. Dependabot covers Python, Go, and GitHub Actions.

@@ -16,6 +16,7 @@ The package requires Python 3.10 or newer. The distribution name is `mizan-billi
 
 ## Contents
 
+- [Receive webhooks with FastAPI or a custom endpoint](https://github.com/alshell7/mizan-client-sdks/blob/main/WEBHOOKS.md#python-fastapi)
 - [How Mizan fits into your application](#how-mizan-fits-into-your-application)
 - [Install](#install)
 - [Configure the client](#configure-the-client)
