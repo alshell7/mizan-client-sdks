@@ -413,6 +413,46 @@ class EligibilityResponse(BaseEnvelope):
     data: EligibilityResult
 
 
+BalanceImpactOperation: TypeAlias = Literal[
+    "consume", "top_up_azeer_units", "top_up_provider_balance", "refund_provider_balance",
+    "set_feature_budget", "promotional_grant",
+]
+
+
+class BalanceImpactPreviewRequest(TypedDict):
+    """Exact mutation input projected without reserving funds or changing state."""
+    operation: BalanceImpactOperation
+    request: dict[str, Any]
+
+
+class BalanceImpact(TypedDict):
+    code: Literal["azeer_unit_millis", "provider_balance_minor"]
+    unit: Literal["milliunit", "halala"]
+    before: ExactAmount
+    delta: ExactAmount
+    after: ExactAmount
+
+
+class BalanceImpactPreviewResult(TypedDict, total=False):
+    advisory: bool
+    operation: BalanceImpactOperation
+    eligible: bool
+    decision_code: str
+    details: dict[str, Any]
+    charges: list[dict[str, Any]]
+    balances: list[BalanceImpact]
+    payment: dict[str, Any] | None
+    budget: dict[str, Any] | None
+    warnings: list[str]
+    decision_revision: int
+    evaluated_at: str
+    expires_at: str
+
+
+class BalanceImpactPreviewResponse(BaseEnvelope):
+    data: BalanceImpactPreviewResult
+
+
 class EntitlementResult(TypedDict, total=False):
     """Capability decision from the active immutable subscription snapshot."""
     capability: Capability
@@ -478,6 +518,17 @@ class DeliveryConfigurationResult(TypedDict):
 
 class DeliveryConfigurationResponse(BaseEnvelope):
     data: DeliveryConfigurationResult
+
+
+class AddonRolloutInput(TypedDict, total=False):
+    display_name: str
+    summary: str
+    included_features: list[str]
+    rollout_stage: Literal["planned", "pilot", "available", "paused", "retired"]
+    enabled: bool
+    rollout_note: str | None
+    documentation_url: str | None
+    reason: str
 
 
 class ConsumptionResponse(BaseEnvelope):

@@ -649,6 +649,60 @@ Delivery reads return `scope`, `ready`, and two `endpoints` slots (`ledger`, `no
 endpoint reports `source` (`business` or `global`), its URL/auth mode, enabled state, revision, attribution, and
 `auth_secret_configured`. The secret itself is write-only and is never returned.
 
+### Preview balance-changing actions
+
+Use the same request you intend to mutate, but wrap it with an operation. The preview is read-only, carries no
+idempotency key, and returns exact strings for every affected balance.
+
+```python
+preview = client.preview_balance_impact(
+    business_id,
+    {
+        "operation": "top_up_provider_balance",
+        "request": {
+            "amount_minor": "10000",
+            "payment_event_id": "provider-payment-001",
+            "payment_status": "confirmed",
+            "currency": "SAR",
+            "paid_total_minor": "11500",
+        },
+    },
+)
+
+for impact in preview["data"]["balances"]:
+    print(impact["code"], impact["before"], impact["delta"], impact["after"])
+```
+
+Supported operations are `consume`, `top_up_azeer_units`, `top_up_provider_balance`,
+`refund_provider_balance`, `promotional_grant`, and `set_feature_budget`. A preview is advisory and expires
+quickly; always submit the mutation with a stable idempotency key and handle the authoritative result.
+
+### Govern add-ons and page admin history
+
+```python
+admin.configure_addon(
+    "advanced_analytics",
+    {
+        "display_name": "Advanced analytics",
+        "summary": "Deeper reporting for pilot businesses.",
+        "included_features": ["Cohort reports", "Custom exports"],
+        "rollout_stage": "pilot",
+        "enabled": True,
+        "rollout_note": "Invite-only until reporting validation completes.",
+        "documentation_url": "https://docs.example.com/advanced-analytics",
+        "reason": "Open the controlled pilot",
+    },
+    idempotency_key="addon:advanced-analytics:pilot-v1",
+)
+
+businesses = admin.list_businesses(search="acme", offset=0, limit=50)
+decisions = admin.list_usage_decisions(business_id, offset=0, limit=25)
+audit = admin.list_business_audit(business_id, offset=0, limit=25)
+```
+
+Global add-on changes control future availability and admin presentation. They never rewrite an existing paid
+subscription snapshot.
+
 ## Scenario 6: top-ups and refunds
 
 Mizan has two financial rails:

@@ -16,7 +16,7 @@ import (
 )
 
 // Version is the SDK version sent in the HTTP User-Agent header.
-const Version = "1.6.0"
+const Version = "1.7.0"
 
 // ExactAmount is an exact base-10 integer string. Money uses halala and Azeer
 // Units use milliunits; never construct these values through float64 arithmetic.
@@ -475,6 +475,22 @@ type EligibilityRequest struct {
 	Components          []ConsumptionComponent `json:"components,omitempty"`
 }
 
+// BalanceImpactPreviewRequest projects the exact input for a corresponding mutation.
+// Request may be a ConsumptionRequest, ConfirmedTopUp, BudgetRequest, refund, or admin grant input.
+type BalanceImpactPreviewRequest struct {
+	Operation string `json:"operation"`
+	Request   any    `json:"request"`
+}
+
+// BalanceImpact is one exact before/delta/after projection.
+type BalanceImpact struct {
+	Code   string      `json:"code"`
+	Unit   string      `json:"unit"`
+	Before ExactAmount `json:"before"`
+	Delta  ExactAmount `json:"delta"`
+	After  ExactAmount `json:"after"`
+}
+
 // APIError is a structured Mizan rejection. Retryable is authoritative; for a
 // mutation, any retry must preserve the original request and IdempotencyKey.
 type APIError struct {
@@ -554,6 +570,18 @@ type DeliveryEndpointInput struct {
 	Reason          string `json:"reason"`
 }
 
+// AddonRolloutInput governs future selection and admin presentation without changing paid snapshots.
+type AddonRolloutInput struct {
+	DisplayName      string   `json:"display_name,omitempty"`
+	Summary          string   `json:"summary,omitempty"`
+	IncludedFeatures []string `json:"included_features,omitempty"`
+	RolloutStage     string   `json:"rollout_stage,omitempty"`
+	Enabled          *bool    `json:"enabled,omitempty"`
+	RolloutNote      *string  `json:"rollout_note,omitempty"`
+	DocumentationURL *string  `json:"documentation_url,omitempty"`
+	Reason           string   `json:"reason"`
+}
+
 // DeliveryEndpoint reports the effective endpoint and whether it came from a
 // business override or the global fallback.
 type DeliveryEndpoint struct {
@@ -629,6 +657,59 @@ func (c *AdminClient) GetGlobalDeliveryEndpoints(ctx context.Context) (Response,
 		return nil, err
 	}
 	return c.requestWithHeaders(ctx, http.MethodGet, "/admin/api/delivery-endpoints", "", nil, "", false, headers)
+}
+
+// ListAddons reads global add-on contents, rollout stage, availability, and catalog pricing.
+func (c *AdminClient) ListAddons(ctx context.Context) (Response, error) {
+	headers, err := c.headers()
+	if err != nil {
+		return nil, err
+	}
+	return c.requestWithHeaders(ctx, http.MethodGet, "/admin/api/addons", "", nil, "", false, headers)
+}
+
+// ConfigureAddon updates attributed global rollout metadata for one catalog add-on.
+func (c *AdminClient) ConfigureAddon(ctx context.Context, addonCode string, in AddonRolloutInput, idempotencyKey string) (Response, error) {
+	if addonCode == "" {
+		return nil, errors.New("mizan: addon code is required")
+	}
+	headers, err := c.headers()
+	if err != nil {
+		return nil, err
+	}
+	return c.requestWithHeaders(ctx, http.MethodPut, "/admin/api/addons/"+url.PathEscape(addonCode), "", in, idempotencyKey, true, headers)
+}
+
+// ListBusinesses reads one page of the admin business directory.
+func (c *AdminClient) ListBusinesses(ctx context.Context, search string, offset, limit int) (Response, error) {
+	headers, err := c.headers()
+	if err != nil {
+		return nil, err
+	}
+	query := url.Values{"search": {search}, "offset": {strconv.Itoa(offset)}, "limit": {strconv.Itoa(limit)}}
+	return c.requestWithHeaders(ctx, http.MethodGet, "/admin/api/businesses?"+query.Encode(), "", nil, "", false, headers)
+}
+
+// ListUsageDecisions reads one newest-first page of immutable usage decisions.
+func (c *AdminClient) ListUsageDecisions(ctx context.Context, businessID string, offset, limit int) (Response, error) {
+	headers, err := c.headers()
+	if err != nil {
+		return nil, err
+	}
+	query := url.Values{"offset": {strconv.Itoa(offset)}, "limit": {strconv.Itoa(limit)}}
+	path := "/admin/api/businesses/" + url.PathEscape(businessID) + "/usage-decisions?" + query.Encode()
+	return c.requestWithHeaders(ctx, http.MethodGet, path, businessID, nil, "", false, headers)
+}
+
+// ListBusinessAudit reads one newest-first page of immutable attributed admin actions.
+func (c *AdminClient) ListBusinessAudit(ctx context.Context, businessID string, offset, limit int) (Response, error) {
+	headers, err := c.headers()
+	if err != nil {
+		return nil, err
+	}
+	query := url.Values{"offset": {strconv.Itoa(offset)}, "limit": {strconv.Itoa(limit)}}
+	path := "/admin/api/businesses/" + url.PathEscape(businessID) + "/audit?" + query.Encode()
+	return c.requestWithHeaders(ctx, http.MethodGet, path, businessID, nil, "", false, headers)
 }
 
 // ConfigureGlobalDeliveryEndpoint creates, rotates, enables, or disables one global fallback.
@@ -749,6 +830,11 @@ func (c *Client) GetCatalog(ctx context.Context) (Response, error) {
 // Consume authoritatively checks and atomically records one source event.
 func (c *Client) Consume(ctx context.Context, businessID string, in ConsumptionRequest, idempotencyKey string) (Response, error) {
 	return c.mutate(ctx, http.MethodPost, c.businessPath(businessID, "consumptions"), businessID, in, idempotencyKey)
+}
+
+// PreviewBalanceImpact returns exact before/delta/after projections without reserving funds or changing state.
+func (c *Client) PreviewBalanceImpact(ctx context.Context, businessID string, in BalanceImpactPreviewRequest) (Response, error) {
+	return c.request(ctx, http.MethodPost, c.businessPath(businessID, "balance-impact-preview"), businessID, in, "", false)
 }
 
 // GetBillingSummary returns current account, subscription, balances, lots, budgets, and replication state.

@@ -508,6 +508,66 @@ func TestAdminClientDeliveryConfiguration(t *testing.T) {
 	}
 }
 
+func TestBalanceImpactPreviewAndAdminGovernanceRequests(t *testing.T) {
+	type observedRequest struct {
+		method, path, query, actor, key string
+	}
+	var observed []observedRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observed = append(observed, observedRequest{
+			method: r.Method,
+			path:   r.URL.Path,
+			query:  r.URL.RawQuery,
+			actor:  r.Header.Get("X-Admin-Actor"),
+			key:    r.Header.Get("Idempotency-Key"),
+		})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"ok":true}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.PreviewBalanceImpact(context.Background(), "business-1", BalanceImpactPreviewRequest{
+		Operation: "top_up_provider_balance",
+		Request:   NewConfirmedTopUp("1000", "payment-1", "1150"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	admin, err := NewAdminClient(server.URL, "admin-secret", "ops@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	_, err = admin.ConfigureAddon(context.Background(), "advanced_analytics", AddonRolloutInput{
+		RolloutStage: "pilot", Enabled: &enabled, Reason: "Pilot rollout",
+	}, "addon-pilot-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = admin.ListUsageDecisions(context.Background(), "business-1", 25, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(observed) != 3 {
+		t.Fatalf("expected 3 requests, got %d", len(observed))
+	}
+	if got := observed[0]; got.method != http.MethodPost || got.path != "/v1/businesses/business-1/balance-impact-preview" || got.key != "" {
+		t.Fatalf("unexpected preview request: %+v", got)
+	}
+	if got := observed[1]; got.method != http.MethodPut || got.path != "/admin/api/addons/advanced_analytics" || got.actor != "ops@example.com" || got.key != "addon-pilot-v1" {
+		t.Fatalf("unexpected add-on request: %+v", got)
+	}
+	if got := observed[2]; got.method != http.MethodGet || got.path != "/admin/api/businesses/business-1/usage-decisions" || got.query != "limit=25&offset=25" || got.actor != "ops@example.com" || got.key != "" {
+		t.Fatalf("unexpected pagination request: %+v", got)
+	}
+}
+
 func TestFinancialRequestsRejectInvalidProviderEvidenceBeforeNetwork(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests++ }))

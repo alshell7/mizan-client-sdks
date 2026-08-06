@@ -30,7 +30,12 @@ The package name is `mizan-billing`; the Python import is `mizan`. The Go module
 Template activations use `plan_id`. When an operator has approved a business-specific plan through the Mizan
 admin API/UI, use `plan_configuration_id` instead. Send exactly one of those fields. Delivery endpoint and plan
 approval operations require a separate admin credential. `MizanAdminClient` (Python) and `AdminClient` (Go)
-expose global and per-business delivery configuration without mixing admin credentials into runtime clients.
+expose global and per-business delivery configuration, add-on rollout governance, and paginated operational reads
+without mixing admin credentials into runtime clients.
+
+Before a UI submits consumption, funding, refund, promotional grant, or feature-budget changes, call the read-only
+balance impact preview. It returns exact `before`, `delta`, and `after` values and an advisory eligibility decision;
+the eventual mutation remains authoritative and still needs its own idempotency key.
 
 ## Feature-specific consumption
 

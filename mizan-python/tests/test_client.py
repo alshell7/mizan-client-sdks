@@ -78,6 +78,25 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(requests[1].full_url.endswith("/v1/businesses/business-1/entitlements/rbac_audit"))
         self.assertIsNone(requests[0].get_header("Idempotency-key"))
 
+    def test_balance_preview_and_admin_pagination_are_read_only(self):
+        requests = []
+        transport = lambda request, timeout: (requests.append(request) or (200, {}, b'{"data":{}}'))
+        client = MizanClient("https://billing.test", "secret", transport=transport)
+        client.preview_balance_impact("business-1", {
+            "operation": "top_up_provider_balance", "request": {"amount_minor": "1000"},
+        })
+        admin = MizanAdminClient("https://admin.test", "admin-secret", actor="ops@example.com", transport=transport)
+        admin.list_usage_decisions("business-1", offset=25, limit=25)
+        admin.configure_addon("voice_broadcast", {
+            "rollout_stage": "pilot", "enabled": True, "reason": "Pilot",
+        }, idempotency_key="addon-pilot")
+        self.assertTrue(requests[0].full_url.endswith("/v1/businesses/business-1/balance-impact-preview"))
+        self.assertIsNone(requests[0].get_header("Idempotency-key"))
+        self.assertIn("/admin/api/businesses/business-1/usage-decisions?", requests[1].full_url)
+        self.assertIsNone(requests[1].get_header("Idempotency-key"))
+        self.assertTrue(requests[2].full_url.endswith("/admin/api/addons/voice_broadcast"))
+        self.assertEqual(requests[2].get_header("Idempotency-key"), "addon-pilot")
+
     def test_custom_plan_activation_serializes_the_immutable_configuration_id(self):
         requests = []
         client = MizanClient(

@@ -24,7 +24,10 @@ from .enums import Capability, FeatureCode
 from .models import (
     ActivationRequest,
     ActivationResponse,
+    AddonRolloutInput,
     ApiResponse,
+    BalanceImpactPreviewRequest,
+    BalanceImpactPreviewResponse,
     BillingSummaryResponse,
     BudgetRequest,
     BudgetResponse,
@@ -272,6 +275,12 @@ class MizanClient:
         """Atomically authorize, charge, record, and sequence one source event."""
         return cast(ConsumptionResponse, self._request("POST", self._business_path(business_id, "consumptions"), request, business_id, idempotency_key))
 
+    def preview_balance_impact(self, business_id: str, request: BalanceImpactPreviewRequest) -> BalanceImpactPreviewResponse:
+        """Project exact before/delta/after effects without reserving funds or changing state."""
+        return cast(BalanceImpactPreviewResponse, self._request(
+            "POST", self._business_path(business_id, "balance-impact-preview"), request,
+            business_id, None, mutation=False))
+
     def consume_conversation_24h(self, business_id: str, *, source_event_id: str, occurred_at: str,
                                  quantity: str = "1", metadata: UsageMetadata | None = None,
                                  idempotency_key: str | None = None) -> ConsumptionResponse:
@@ -512,6 +521,39 @@ class MizanAdminClient(MizanClient):
         return cast(DeliveryConfigurationResponse, self._request(
             "GET", "/admin/api/delivery-endpoints", None, "", None, mutation=False,
             extra_headers=self._admin_headers()))
+
+    def list_addons(self) -> ApiResponse:
+        """Read global add-on contents, rollout stage, availability, and immutable pricing facts."""
+        return self._request("GET", "/admin/api/addons", None, "", None, mutation=False,
+                             extra_headers=self._admin_headers())
+
+    def configure_addon(self, addon_code: str, request: AddonRolloutInput,
+                        *, idempotency_key: str | None = None) -> ApiResponse:
+        """Update attributed global rollout metadata for one catalog add-on."""
+        if not addon_code:
+            raise ValueError("addon_code is required")
+        return self._request("PUT", f"/admin/api/addons/{quote(addon_code, safe='')}", request, "",
+                             idempotency_key, extra_headers=self._admin_headers())
+
+    def list_businesses(self, *, search: str = "", offset: int = 0, limit: int = 50) -> ApiResponse:
+        """Read one page of the admin business directory."""
+        query = urlencode({"search": search, "offset": offset, "limit": limit})
+        return self._request("GET", f"/admin/api/businesses?{query}", None, "", None,
+                             mutation=False, extra_headers=self._admin_headers())
+
+    def list_usage_decisions(self, business_id: str, *, offset: int = 0, limit: int = 25) -> ApiResponse:
+        """Read one newest-first page of immutable usage decisions."""
+        query = urlencode({"offset": offset, "limit": limit})
+        path = f"/admin/api/businesses/{quote(business_id, safe='')}/usage-decisions?{query}"
+        return self._request("GET", path, None, business_id, None, mutation=False,
+                             extra_headers=self._admin_headers())
+
+    def list_business_audit(self, business_id: str, *, offset: int = 0, limit: int = 25) -> ApiResponse:
+        """Read one newest-first page of immutable attributed admin actions."""
+        query = urlencode({"offset": offset, "limit": limit})
+        path = f"/admin/api/businesses/{quote(business_id, safe='')}/audit?{query}"
+        return self._request("GET", path, None, business_id, None, mutation=False,
+                             extra_headers=self._admin_headers())
 
     def configure_global_delivery_endpoint(self, kind: str, request: DeliveryEndpointInput,
                                            *, idempotency_key: str | None = None) -> DeliveryConfigurationResponse:

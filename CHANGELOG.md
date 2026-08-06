@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.0 - 2026-08-06
+
+- Add a read-only balance impact preview for consumption, Azeer Unit and provider funding, provider refunds, promotional grants, and feature budgets.
+- Add attributed global add-on rollout governance for catalog contents, availability, rollout stages, notes, and documentation links.
+- Add paginated admin helpers for the business directory, usage decisions, and business audit history.
+
 ## 1.6.0 - 2026-08-06
 
 - Require whole positive quantities for count-priced events while preserving exact milli-precision for provider-normalized telephony minutes.

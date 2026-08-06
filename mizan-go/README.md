@@ -49,10 +49,10 @@ Your service supplies facts, such as a confirmed payment or completed billable a
 ## Install
 
 ```bash
-go get github.com/alshell7/mizan-client-sdks/mizan-go@v1.6.0
+go get github.com/alshell7/mizan-client-sdks/mizan-go@v1.7.0
 ```
 
-The module is stored in a repository subdirectory, so repository release tags use `mizan-go/v1.6.0`.
+The module is stored in a repository subdirectory, so repository release tags use `mizan-go/v1.7.0`.
 
 Import it with:
 
@@ -573,6 +573,52 @@ Business endpoint records override global fallbacks. An explicitly disabled busi
 Delivery reads decode into `DeliveryConfigurationResult`: `Scope` identifies the requested storage scope,
 `Ready` means both effective endpoint kinds are enabled, and each endpoint reports its effective `Source`, URL,
 auth mode, enabled state, revision, attribution, and `AuthSecretConfigured`. The secret is write-only.
+
+### Preview balance-changing actions
+
+The preview uses the same request intended for the mutation and returns exact `before`, `delta`, and `after`
+strings. It is read-only and does not send an idempotency key.
+
+```go
+topUp := mizan.NewConfirmedTopUp("10000", "provider-payment-001", "11500")
+preview, err := client.PreviewBalanceImpact(ctx, businessID, mizan.BalanceImpactPreviewRequest{
+	Operation: "top_up_provider_balance",
+	Request:   topUp,
+})
+if err != nil { return err }
+
+fmt.Println(preview["data"])
+```
+
+Supported operations are `consume`, `top_up_azeer_units`, `top_up_provider_balance`,
+`refund_provider_balance`, `promotional_grant`, and `set_feature_budget`. The preview is advisory and expires
+quickly; the mutation remains authoritative and requires its normal stable idempotency key.
+
+### Govern add-ons and page admin history
+
+```go
+enabled := true
+note := "Invite-only until reporting validation completes."
+docsURL := "https://docs.example.com/advanced-analytics"
+_, err = admin.ConfigureAddon(ctx, "advanced_analytics", mizan.AddonRolloutInput{
+	DisplayName:      "Advanced analytics",
+	Summary:          "Deeper reporting for pilot businesses.",
+	IncludedFeatures: []string{"Cohort reports", "Custom exports"},
+	RolloutStage:     "pilot",
+	Enabled:          &enabled,
+	RolloutNote:      &note,
+	DocumentationURL: &docsURL,
+	Reason:           "Open the controlled pilot",
+}, "addon:advanced-analytics:pilot-v1")
+if err != nil { return err }
+
+businesses, err := admin.ListBusinesses(ctx, "acme", 0, 50)
+decisions, err := admin.ListUsageDecisions(ctx, businessID, 0, 25)
+audit, err := admin.ListBusinessAudit(ctx, businessID, 0, 25)
+```
+
+Global add-on changes govern future availability and admin presentation; paid subscription snapshots remain
+immutable.
 
 ## Scenario 6: top-ups and refunds
 
