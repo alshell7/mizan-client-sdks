@@ -14,6 +14,7 @@ It helps you:
 
 ## Contents
 
+- [Runnable end-to-end and webhook examples](examples/README.md)
 - [Receive webhooks with Fiber or any Go HTTP framework](https://github.com/alshell7/mizan-client-sdks/blob/main/WEBHOOKS.md#go-fiber)
 - [How Mizan fits into your service](#how-mizan-fits-into-your-service)
 - [Install](#install)
@@ -32,7 +33,7 @@ It helps you:
 
 ## How Mizan fits into your service
 
-Call Mizan from trusted backend code. Never place the API token in browser, mobile, or customer-controlled code.
+Call Mizan from trusted backend code. Never place the API token in browser, mobile, or customer-controlled code. A production runtime token authorizes exactly one business.
 
 ```mermaid
 flowchart LR
@@ -49,10 +50,10 @@ Your service supplies facts, such as a confirmed payment or completed billable a
 ## Install
 
 ```bash
-go get github.com/alshell7/mizan-client-sdks/mizan-go@v1.7.0
+go get github.com/alshell7/mizan-client-sdks/mizan-go@v1.8.0
 ```
 
-The module is stored in a repository subdirectory, so repository release tags use `mizan-go/v1.7.0`.
+The module is stored in a repository subdirectory, so repository release tags use `mizan-go/v1.8.0`.
 
 Import it with:
 
@@ -74,9 +75,10 @@ import (
 )
 
 func NewMizanClient() *mizan.Client {
-	client, err := mizan.NewClient(
+	client, err := mizan.NewBusinessClient(
 		os.Getenv("MIZAN_BASE_URL"),
 		os.Getenv("MIZAN_API_TOKEN"),
+		os.Getenv("MIZAN_BUSINESS_ID"),
 	)
 	if err != nil {
 		log.Fatalf("configure Mizan: %v", err)
@@ -92,11 +94,12 @@ func NewMizanClient() *mizan.Client {
 |---|---|---|
 | `BaseURL` | Mizan environment URL | Environment configuration |
 | `Token` | Bearer API token | Secret manager value |
+| `BusinessID` | Business authorized by the runtime token | Stable server-side business ID |
 | `HTTPClient.Timeout` | Maximum duration of one HTTP attempt | About 10 seconds |
 | `MaxAttempts` | Maximum attempts for retryable mutations | `3` |
 | `Logger` | Optional structured SDK logger | Redacting application logger |
 
-The client automatically adds authorization, request timestamp, request ID, business scope, content type, user agent, and mutation idempotency headers.
+The client automatically adds authorization, request timestamp, request ID, business scope, content type, user agent, and mutation idempotency headers. `NewBusinessClient` rejects a call for a different business before sending HTTP. `NewClient` remains available for development and explicitly trusted platform-wide deployments.
 
 ### Use request contexts
 
@@ -409,7 +412,9 @@ fmt.Println(decision.Charges)
 fmt.Println(decision.Balances.AzeerUnitMillis)
 ```
 
-Derive `SourceEventID` from your own durable event. It adds domain-level deduplication in addition to the HTTP idempotency key.
+Derive `SourceEventID` from your own durable event. It identifies one atomic billing decision in addition to the HTTP idempotency key. Never reuse it for a later decision; if one product event creates several charges, send them together as `Components` under that one source ID.
+
+`OccurredAt` is the product event time. It must be inside the active subscription's current open monthly period (period end is exclusive), even for quarterly, semi-annual, or annual subscriptions. Persist it with the event and replay the identical timestamp after an uncertain outcome.
 
 ### Contract for every feature code
 
@@ -418,25 +423,28 @@ that can accidentally be sent to the wrong feature.
 
 | Feature code | Exported input struct | Canonical method | Billable input |
 |---|---|---|---|
-| `conversation_24h` | `Conversation24HUsage` | `ConsumeConversation24H` | `Quantity`, default `"1"` window |
+| `conversation_24h` | `Conversation24HUsage` | `ConsumeConversation24H` | Required `ConversationID` + `Channel`; Mizan decides whether activity opens a new 24-hour window |
 | `outbound_delivered_message` | `OutboundDeliveredMessageUsage` | `ConsumeOutboundDeliveredMessage` | `Quantity`, default `"1"` delivered message |
-| `ai_assist_action_over_allowance` | `AIAssistActionOverAllowanceUsage` | `ConsumeAIAssistActionOverAllowance` | `Quantity`, default `"1"` over-allowance action |
+| `ai_assist_action_over_allowance` | `AIAssistActionUsage` | `ConsumeAIAssistAction` | Report every action; Mizan applies the monthly allowance and returns its decision |
 | `voice_ai_started_minute` | `VoiceAIStartedMinuteUsage` | `ConsumeVoiceAIStartedMinute` | Required positive raw `DurationSeconds`; Mizan rounds up |
 | `ai_reply_handling` | `AIReplyHandlingUsage` | `ConsumeAIReplyHandling` | `Quantity`, default `"1"`; currently included |
 | `whatsapp_meta_marketing_msg` | `WhatsAppMetaMarketingMessageUsage` | `ConsumeWhatsAppMetaMarketingMessage` | Meta `ProviderEventID`; `Quantity` defaults to `"1"` |
 | `telephony_voice_minute` | `TelephonyVoiceMinuteUsage` | `ConsumeTelephonyVoiceMinute` | Provider-normalized `BillableMinutes`, default `"1"` |
 | `inbound_voice_minute` | `InboundVoiceMinuteUsage` | `ConsumeInboundVoiceMinute` | Provider-normalized `BillableMinutes`, default `"1"`; currently zero-rated |
-| `other_provider_charge` | `OtherProviderChargeUsage` | `ConsumeOtherProviderCharge` | Exact `ProviderAmountMinor` in halala; zero is valid |
+| `other_provider_charge` | `OtherProviderChargeUsage` | `ConsumeOtherProviderCharge` | Settlement amount plus required invoice, original amount/currency, and tariff; non-SAR requires FX rule |
 
 The inputs intentionally differ:
 
 ```go
-// The caller must first establish that the included AI allowance is exhausted.
-_, err = client.ConsumeAIAssistActionOverAllowance(ctx, businessID, mizan.AIAssistActionOverAllowanceUsage{
-	SourceEventID: "assist-overage-001",
+// Report every assist action. Mizan owns the subscription-month allowance counter.
+response, err := client.ConsumeAIAssistAction(ctx, businessID, mizan.AIAssistActionUsage{
+	SourceEventID: "assist-action-001",
 	OccurredAt:    time.Now().UTC(),
 	// Quantity omitted: exactly one action.
-}, "consume:assist-overage-001")
+}, "consume:assist-action-001")
+
+decision, err := mizan.DecodeData[mizan.ConsumptionResult](response)
+allowance := decision.Charges[0].Allowance // nil only for features without an allowance.
 
 // Raw seconds. Do not pre-round: Mizan charges 61 seconds as 2 started minutes.
 _, err = client.ConsumeVoiceAIStartedMinute(ctx, businessID, mizan.VoiceAIStartedMinuteUsage{
@@ -466,7 +474,8 @@ _, err = client.ConsumeInboundVoiceMinute(ctx, businessID, mizan.InboundVoiceMin
 _, err = client.ConsumeOtherProviderCharge(ctx, businessID, mizan.OtherProviderChargeUsage{
 	SourceEventID: "provider-fee-001", OccurredAt: time.Now().UTC(),
 	Provider: "Carrier", ProviderEventID: "invoice-line-123", ProviderAmountMinor: "337",
-	Metadata: &mizan.UsageMetadata{ProviderInvoiceID: "INV-2026-08", TariffVersion: "carrier-v4"},
+	ProviderInvoiceID: "INV-2026-08", OriginalAmountMinor: "25", OriginalCurrency: "USD",
+	TariffVersion: "carrier-v4", FXRule: "USD-SAR-2026-08-04",
 }, "consume:provider-fee-001")
 ```
 
@@ -499,7 +508,7 @@ Every successful HTTP response is an envelope with `api_version`, `catalog_versi
 | `SourceEventID` | Your durable event identifier echoed for reconciliation |
 | `LedgerEntryID` | Immutable ledger entry created for the decision |
 | `BusinessSequence` | Monotonic per-business ordering key for downstream replication |
-| `Charges` | Per-component rail, exact quantity/unit/money amounts, and provider treatment |
+| `Charges` | Typed per-component rail, exact quantity/unit/money amounts, provider treatment, and optional `Allowance` |
 | `AllocationsByFeature` | Azeer credit lots consumed by each feature; empty for non-unit rails |
 | `Totals` | Exact aggregate Azeer milliunits and provider halala debited by the event |
 | `Balances` | Remaining Azeer and provider balances after commit |
@@ -509,7 +518,7 @@ Every successful HTTP response is an envelope with `api_version`, `catalog_versi
 
 ### Multiple components
 
-Use components when one product event creates several related charges. Mizan accepts or rejects all components together.
+Use components when one product event creates several related charges. Mizan accepts or rejects all components together. The request's `SourceEventID` belongs to the combined decision, not to any one component.
 
 ```go
 response, err := client.Consume(ctx, businessID, mizan.ConsumptionRequest{
@@ -720,14 +729,20 @@ if err != nil {
 	return err
 }
 
-fmt.Println(summary.Subscription)
+fmt.Println(summary.AsOf)
+if summary.Subscription != nil {
+	fmt.Println(summary.Subscription.Status)          // persisted lifecycle row
+	fmt.Println(summary.Subscription.EffectiveStatus) // projected at summary.AsOf
+}
 fmt.Println(summary.Balances)
 fmt.Println(summary.CreditLots)
 fmt.Println(summary.Budgets)
 fmt.Println(summary.Replication)
 ```
 
-Use the summary for customer billing screens and support tools. Do not reconstruct current balances by replaying the ledger on a request path.
+Use `EffectiveStatus`, not the persisted `Status`, for current UI decisions. The projection is authoritative at
+`AsOf`; it can be `upcoming` or `expired` without rewriting lifecycle history. Use the summary for customer billing
+screens and support tools. Do not reconstruct current balances by replaying the ledger on a request path.
 
 ### Ledger pagination
 
@@ -884,14 +899,14 @@ ledger, err := mizan.DecodeData[mizan.LedgerResult](response)
 ## Production checklist
 
 - [ ] Call the SDK only from trusted server-side code.
-- [ ] Keep tokens in a secret manager and separate environments.
+- [ ] Keep tokens in a secret manager and separate environments; use a distinct business-scoped token for every production business.
 - [ ] Use contexts with deliberate deadlines.
 - [ ] Fetch and persist `catalog_version` for checkout/change workflows.
 - [ ] Use typed SDK constants or live `contract_values`.
 - [ ] Keep financial/unit values as `ExactAmount`; avoid `float64`.
 - [ ] Derive stable idempotency keys from durable domain events.
 - [ ] Retry mutations only with identical input and the same key.
-- [ ] Persist provider/source event IDs for reconciliation.
+- [ ] Persist provider/source event IDs for reconciliation; use each source event ID for exactly one atomic decision.
 - [ ] Treat eligibility as advisory; use consumption for final billing.
 - [ ] Log request ID, business ID, operation, and key—never the token.
 - [ ] Alert on exhausted retries, protocol errors, and replication lag.

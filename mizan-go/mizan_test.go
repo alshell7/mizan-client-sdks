@@ -270,7 +270,8 @@ func TestFeatureSpecificConsumptionContracts(t *testing.T) {
 	client, _ := NewClient(server.URL, "secret")
 	now := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
 	if _, err := client.ConsumeConversation24H(context.Background(), "business-1", Conversation24HUsage{
-		SourceEventID: "conversation-1", OccurredAt: now,
+		SourceEventID: "conversation-1", OccurredAt: now, ConversationID: "conversation-42", Channel: ChannelWhatsApp,
+		Metadata: &UsageMetadata{ConversationID: "wrong", Channel: ChannelWebchat},
 	}, "conversation-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +280,7 @@ func TestFeatureSpecificConsumptionContracts(t *testing.T) {
 	}, "msg-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.ConsumeAIAssistActionOverAllowance(context.Background(), "business-1", AIAssistActionOverAllowanceUsage{
+	if _, err := client.ConsumeAIAssistAction(context.Background(), "business-1", AIAssistActionUsage{
 		SourceEventID: "assist-1", OccurredAt: now,
 	}, "assist-1"); err != nil {
 		t.Fatal(err)
@@ -313,7 +314,8 @@ func TestFeatureSpecificConsumptionContracts(t *testing.T) {
 	}
 	if _, err := client.ConsumeOtherProviderCharge(context.Background(), "business-1", OtherProviderChargeUsage{
 		SourceEventID: "fee-1", OccurredAt: now, Provider: "Carrier", ProviderEventID: "INV1",
-		ProviderAmountMinor: "0",
+		ProviderAmountMinor: "337", ProviderInvoiceID: "invoice-1", OriginalAmountMinor: "25",
+		OriginalCurrency: "usd", TariffVersion: "carrier-v4", FXRule: "USD-SAR-2026-08-04",
 	}, "fee-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -341,12 +343,94 @@ func TestFeatureSpecificConsumptionContracts(t *testing.T) {
 	if bodies[7]["quantity"] != "1.250" {
 		t.Fatalf("provider-normalized minutes drifted: %#v", bodies[7])
 	}
-	if bodies[8]["provider_amount_minor"] != "0" || bodies[8]["quantity"] != nil {
+	if bodies[8]["provider_amount_minor"] != "337" || bodies[8]["quantity"] != nil {
 		t.Fatalf("provider amount wire contract drifted: %#v", bodies[8])
 	}
 	metadata := bodies[5]["metadata"].(map[string]any)
 	if metadata["provider"] != "Meta" || metadata["provider_event_id"] != "wamid.1" {
 		t.Fatalf("provider attribution missing: %#v", metadata)
+	}
+	conversationMetadata := bodies[0]["metadata"].(map[string]any)
+	if conversationMetadata["conversation_id"] != "conversation-42" || conversationMetadata["channel"] != "whatsapp" {
+		t.Fatalf("conversation identity missing: %#v", conversationMetadata)
+	}
+	providerMetadata := bodies[8]["metadata"].(map[string]any)
+	if providerMetadata["provider_invoice_id"] != "invoice-1" || providerMetadata["original_amount_minor"] != "25" ||
+		providerMetadata["original_currency"] != "USD" || providerMetadata["tariff_version"] != "carrier-v4" ||
+		providerMetadata["fx_rule"] != "USD-SAR-2026-08-04" {
+		t.Fatalf("pass-through evidence missing: %#v", providerMetadata)
+	}
+}
+
+func TestConsumptionResultDecodesAllowanceDecision(t *testing.T) {
+	response := Response{"data": map[string]any{
+		"accepted": true,
+		"code":     "ACCEPTED",
+		"charges": []any{map[string]any{
+			"rail": "azeer_units", "quantity_millis": "1000", "reported_quantity_millis": "1000",
+			"unit_millis": "0", "money_minor": "0", "treatment": nil,
+			"allowance": map[string]any{"limit_quantity_millis": "50000", "consumed_before_millis": "49000",
+				"consumed_after_millis": "50000", "billable_quantity_millis": "0"},
+		}},
+	}}
+	decision, err := DecodeData[ConsumptionResult](response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decision.Charges) != 1 || decision.Charges[0].Allowance == nil ||
+		decision.Charges[0].Allowance.BillableQuantityMillis != "0" ||
+		decision.Charges[0].Allowance.ConsumedAfterMillis != "50000" {
+		t.Fatalf("allowance decision did not decode: %#v", decision.Charges)
+	}
+}
+
+func TestBusinessClientRejectsTokenScopeMismatchBeforeHTTP(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write([]byte(`{"data":{"business_id":"business-1"}}`))
+	}))
+	defer server.Close()
+	client, err := NewBusinessClient(server.URL, "business-secret", "business-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.GetBillingSummary(context.Background(), "business-2"); err == nil {
+		t.Fatal("expected business token scope mismatch")
+	}
+	if requests != 0 {
+		t.Fatalf("scope mismatch issued %d HTTP requests", requests)
+	}
+	if _, err = client.GetBillingSummary(context.Background(), "business-1"); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("scoped request count = %d, want 1", requests)
+	}
+}
+
+func TestBillingSummaryDecodesServerEffectiveStatusAndAsOf(t *testing.T) {
+	response := Response{"data": map[string]any{
+		"business_id": "business-1", "as_of": "2026-08-11T12:34:56.789Z",
+		"account": map[string]any{},
+		"subscription": map[string]any{
+			"id": "sub-1", "status": "active", "effective_status": "expired",
+			"snapshot":             map[string]any{"catalog_version": "catalog-v1"},
+			"current_period_start": "2026-07-11T12:34:56.789Z",
+			"current_period_end":   "2026-08-11T12:34:56.789Z", "cancel_at_period_end": false,
+		},
+		"balances":    map[string]any{"azeer_unit_millis": "0", "provider_balance_minor": "0"},
+		"credit_lots": []any{}, "budgets": []any{}, "pauses": []any{},
+		"replication": map[string]any{},
+		"delivery":    map[string]any{"scope": "business", "ready": true, "endpoints": []any{}},
+	}}
+	summary, err := DecodeData[BillingSummaryResult](response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.AsOf.Nanosecond() != 789_000_000 || summary.Subscription == nil ||
+		summary.Subscription.Status != "active" || summary.Subscription.EffectiveStatus != "expired" {
+		t.Fatalf("effective summary did not decode: %#v", summary)
 	}
 }
 
@@ -366,8 +450,12 @@ func TestFeatureSpecificConsumptionRejectsInvalidInputsBeforeHTTP(t *testing.T) 
 		name string
 		call func() error
 	}{
-		{"zero count", func() error {
-			_, err := client.ConsumeConversation24H(ctx, "business-1", Conversation24HUsage{SourceEventID: "x", OccurredAt: now, Quantity: "0"}, "x")
+		{"missing conversation ID", func() error {
+			_, err := client.ConsumeConversation24H(ctx, "business-1", Conversation24HUsage{SourceEventID: "x", OccurredAt: now, Channel: ChannelWhatsApp}, "x")
+			return err
+		}},
+		{"missing conversation channel", func() error {
+			_, err := client.ConsumeConversation24H(ctx, "business-1", Conversation24HUsage{SourceEventID: "x", OccurredAt: now, ConversationID: "conversation-1"}, "x")
 			return err
 		}},
 		{"too precise", func() error {
@@ -383,7 +471,7 @@ func TestFeatureSpecificConsumptionRejectsInvalidInputsBeforeHTTP(t *testing.T) 
 			return err
 		}},
 		{"missing time", func() error {
-			_, err := client.ConsumeAIAssistActionOverAllowance(ctx, "business-1", AIAssistActionOverAllowanceUsage{SourceEventID: "x"}, "x")
+			_, err := client.ConsumeAIAssistAction(ctx, "business-1", AIAssistActionUsage{SourceEventID: "x"}, "x")
 			return err
 		}},
 		{"zero duration", func() error {
@@ -403,11 +491,23 @@ func TestFeatureSpecificConsumptionRejectsInvalidInputsBeforeHTTP(t *testing.T) 
 			return err
 		}},
 		{"negative provider amount", func() error {
-			_, err := client.ConsumeOtherProviderCharge(ctx, "business-1", OtherProviderChargeUsage{SourceEventID: "x", OccurredAt: now, Provider: "carrier", ProviderEventID: "fee", ProviderAmountMinor: "-1"}, "x")
+			_, err := client.ConsumeOtherProviderCharge(ctx, "business-1", OtherProviderChargeUsage{SourceEventID: "x", OccurredAt: now, Provider: "carrier", ProviderEventID: "fee", ProviderAmountMinor: "-1", ProviderInvoiceID: "invoice", OriginalAmountMinor: "1", OriginalCurrency: "SAR", TariffVersion: "v1"}, "x")
 			return err
 		}},
 		{"overflow provider amount", func() error {
-			_, err := client.ConsumeOtherProviderCharge(ctx, "business-1", OtherProviderChargeUsage{SourceEventID: "x", OccurredAt: now, Provider: "carrier", ProviderEventID: "fee", ProviderAmountMinor: "9223372036854775808"}, "x")
+			_, err := client.ConsumeOtherProviderCharge(ctx, "business-1", OtherProviderChargeUsage{SourceEventID: "x", OccurredAt: now, Provider: "carrier", ProviderEventID: "fee", ProviderAmountMinor: "9223372036854775808", ProviderInvoiceID: "invoice", OriginalAmountMinor: "1", OriginalCurrency: "SAR", TariffVersion: "v1"}, "x")
+			return err
+		}},
+		{"missing provider invoice", func() error {
+			_, err := client.ConsumeOtherProviderCharge(ctx, "business-1", OtherProviderChargeUsage{SourceEventID: "x", OccurredAt: now, Provider: "carrier", ProviderEventID: "fee", ProviderAmountMinor: "100", OriginalAmountMinor: "100", OriginalCurrency: "SAR", TariffVersion: "v1"}, "x")
+			return err
+		}},
+		{"non-SAR missing FX", func() error {
+			_, err := client.ConsumeOtherProviderCharge(ctx, "business-1", OtherProviderChargeUsage{SourceEventID: "x", OccurredAt: now, Provider: "carrier", ProviderEventID: "fee", ProviderAmountMinor: "100", ProviderInvoiceID: "invoice", OriginalAmountMinor: "25", OriginalCurrency: "USD", TariffVersion: "v1"}, "x")
+			return err
+		}},
+		{"SAR settlement mismatch", func() error {
+			_, err := client.ConsumeOtherProviderCharge(ctx, "business-1", OtherProviderChargeUsage{SourceEventID: "x", OccurredAt: now, Provider: "carrier", ProviderEventID: "fee", ProviderAmountMinor: "100", ProviderInvoiceID: "invoice", OriginalAmountMinor: "99", OriginalCurrency: "SAR", TariffVersion: "v1"}, "x")
 			return err
 		}},
 	}
@@ -459,7 +559,7 @@ func TestFeatureREADMEReferencesRealContractsAndMethods(t *testing.T) {
 	rows := [][]string{
 		{"conversation_24h", "Conversation24HUsage", "ConsumeConversation24H"},
 		{"outbound_delivered_message", "OutboundDeliveredMessageUsage", "ConsumeOutboundDeliveredMessage"},
-		{"ai_assist_action_over_allowance", "AIAssistActionOverAllowanceUsage", "ConsumeAIAssistActionOverAllowance"},
+		{"ai_assist_action_over_allowance", "AIAssistActionUsage", "ConsumeAIAssistAction"},
 		{"voice_ai_started_minute", "VoiceAIStartedMinuteUsage", "ConsumeVoiceAIStartedMinute"},
 		{"ai_reply_handling", "AIReplyHandlingUsage", "ConsumeAIReplyHandling"},
 		{"whatsapp_meta_marketing_msg", "WhatsAppMetaMarketingMessageUsage", "ConsumeWhatsAppMetaMarketingMessage"},
@@ -474,11 +574,11 @@ func TestFeatureREADMEReferencesRealContractsAndMethods(t *testing.T) {
 			}
 		}
 	}
-	_ = []any{Conversation24HUsage{}, OutboundDeliveredMessageUsage{}, AIAssistActionOverAllowanceUsage{},
+	_ = []any{Conversation24HUsage{}, OutboundDeliveredMessageUsage{}, AIAssistActionUsage{},
 		VoiceAIStartedMinuteUsage{}, AIReplyHandlingUsage{}, WhatsAppMetaMarketingMessageUsage{},
 		TelephonyVoiceMinuteUsage{}, InboundVoiceMinuteUsage{}, OtherProviderChargeUsage{}}
 	_ = []any{(*Client).ConsumeConversation24H, (*Client).ConsumeOutboundDeliveredMessage,
-		(*Client).ConsumeAIAssistActionOverAllowance, (*Client).ConsumeVoiceAIStartedMinute,
+		(*Client).ConsumeAIAssistAction, (*Client).ConsumeVoiceAIStartedMinute,
 		(*Client).ConsumeAIReplyHandling, (*Client).ConsumeWhatsAppMetaMarketingMessage,
 		(*Client).ConsumeTelephonyVoiceMinute, (*Client).ConsumeInboundVoiceMinute,
 		(*Client).ConsumeOtherProviderCharge}

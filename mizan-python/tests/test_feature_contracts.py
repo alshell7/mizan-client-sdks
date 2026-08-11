@@ -5,8 +5,10 @@ from pathlib import Path
 
 import mizan
 from mizan import (
+    Channel,
     FeatureCode,
     MizanClient,
+    ai_assist_action,
     ai_assist_action_over_allowance,
     ai_reply_handling,
     conversation_24h,
@@ -22,15 +24,38 @@ from mizan import (
 NOW = "2026-08-04T00:00:00Z"
 
 
+def conversation(**overrides):
+    values = {"source_event_id": "conversation-1", "occurred_at": NOW,
+              "conversation_id": "conversation-1", "channel": Channel.WHATSAPP}
+    values.update(overrides)
+    return conversation_24h(**values)
+
+
+def pass_through(**overrides):
+    values = {"source_event_id": "provider-fee-1", "occurred_at": NOW,
+              "provider": "Carrier", "provider_event_id": "provider-event-1",
+              "provider_amount_minor": "337", "provider_invoice_id": "INV-1",
+              "original_amount_minor": "337", "original_currency": "SAR",
+              "tariff_version": "carrier-v1"}
+    values.update(overrides)
+    return other_provider_charge(**values)
+
+
 class FeatureBuilderContractTests(unittest.TestCase):
+    def test_billing_summary_exports_server_effective_lifecycle_contract(self):
+        self.assertTrue({"business_id", "as_of", "subscription", "delivery"}
+                        <= mizan.BillingSummaryResult.__required_keys__)
+        self.assertTrue({"status", "effective_status", "current_period_start", "current_period_end"}
+                        <= mizan.SubscriptionSummary.__required_keys__)
+
     def test_every_feature_code_has_a_named_exported_contract_and_builder(self):
         cases = [
             ("conversation_24h", "Conversation24HConsumptionRequest",
-             lambda: conversation_24h(source_event_id="conversation-1", occurred_at=NOW)),
+             conversation),
             ("outbound_delivered_message", "OutboundDeliveredMessageConsumptionRequest",
              lambda: outbound_delivered_message(source_event_id="message-1", occurred_at=NOW)),
-            ("ai_assist_action_over_allowance", "AIAssistActionOverAllowanceConsumptionRequest",
-             lambda: ai_assist_action_over_allowance(source_event_id="assist-1", occurred_at=NOW)),
+            ("ai_assist_action_over_allowance", "AIAssistActionConsumptionRequest",
+             lambda: ai_assist_action(source_event_id="assist-1", occurred_at=NOW)),
             ("ai_reply_handling", "AIReplyHandlingConsumptionRequest",
              lambda: ai_reply_handling(source_event_id="reply-1", occurred_at=NOW)),
             ("voice_ai_started_minute", "VoiceAIStartedMinuteConsumptionRequest",
@@ -45,9 +70,7 @@ class FeatureBuilderContractTests(unittest.TestCase):
              lambda: inbound_voice_minute(source_event_id="inbound-1", occurred_at=NOW,
                                            provider="Carrier", provider_event_id="IN1")),
             ("other_provider_charge", "OtherProviderChargeConsumptionRequest",
-             lambda: other_provider_charge(source_event_id="fee-1", occurred_at=NOW,
-                                            provider="Carrier", provider_event_id="INV1",
-                                            provider_amount_minor="337")),
+             pass_through),
         ]
         self.assertEqual({item[0] for item in cases}, set(values(FeatureCode)))
         for feature_code, contract_name, build in cases:
@@ -60,7 +83,7 @@ class FeatureBuilderContractTests(unittest.TestCase):
 
     def test_quantity_defaults_only_on_quantity_based_contracts(self):
         requests = [
-            conversation_24h(source_event_id="a", occurred_at=NOW),
+            conversation(source_event_id="a"),
             outbound_delivered_message(source_event_id="b", occurred_at=NOW),
             ai_assist_action_over_allowance(source_event_id="c", occurred_at=NOW),
             ai_reply_handling(source_event_id="d", occurred_at=NOW),
@@ -70,8 +93,8 @@ class FeatureBuilderContractTests(unittest.TestCase):
         ]
         self.assertTrue(all(request["quantity"] == "1" for request in requests))
         voice = voice_ai_started_minute(source_event_id="h", occurred_at=NOW, duration_seconds="1")
-        provider = other_provider_charge(source_event_id="i", occurred_at=NOW, provider="Carrier",
-                                         provider_event_id="fee-i", provider_amount_minor="0")
+        provider = pass_through(source_event_id="i", provider_event_id="fee-i",
+                                provider_amount_minor="0", original_amount_minor="0")
         self.assertNotIn("quantity", voice)
         self.assertNotIn("quantity", provider)
 
@@ -90,18 +113,39 @@ class FeatureBuilderContractTests(unittest.TestCase):
         self.assertEqual(telephony["metadata"]["provider"], "Twilio")
         self.assertEqual(telephony["metadata"]["provider_event_id"], "CA123")
 
+    def test_engine_owned_conversation_windows_and_ai_allowance_inputs(self):
+        request = conversation(metadata={"conversation_id": "wrong", "channel": Channel.TIKTOK})
+        self.assertEqual(request["quantity"], "1")
+        self.assertEqual(request["metadata"]["conversation_id"], "conversation-1")
+        self.assertEqual(request["metadata"]["channel"], Channel.WHATSAPP)
+        self.assertEqual(ai_assist_action(source_event_id="assist", occurred_at=NOW),
+                         ai_assist_action_over_allowance(source_event_id="assist", occurred_at=NOW))
+        self.assertIs(mizan.AIAssistActionConsumptionRequest,
+                      mizan.AIAssistActionOverAllowanceConsumptionRequest)
+
+    def test_pass_through_requires_original_invoice_and_conditional_fx_evidence(self):
+        sar = pass_through(original_currency="sar")
+        self.assertEqual(sar["metadata"]["original_currency"], "SAR")
+        usd = pass_through(provider_amount_minor="375", original_amount_minor="100",
+                           original_currency="USD", fx_rule="USD-SAR-2026-08")
+        self.assertEqual(usd["metadata"]["fx_rule"], "USD-SAR-2026-08")
+        with self.assertRaises(ValueError):
+            pass_through(original_currency="USD", original_amount_minor="100")
+        with self.assertRaises(ValueError):
+            pass_through(provider_amount_minor="338", original_amount_minor="337")
+
     def test_invalid_feature_inputs_fail_before_a_request_can_be_built(self):
         cases = {
-            "empty source": lambda: conversation_24h(source_event_id="", occurred_at=NOW),
-            "long source": lambda: conversation_24h(source_event_id="x" * 129, occurred_at=NOW),
-            "missing timezone": lambda: conversation_24h(source_event_id="x", occurred_at="2026-08-04T00:00:00"),
-            "invalid timestamp": lambda: conversation_24h(source_event_id="x", occurred_at="not-a-date"),
+            "empty source": lambda: conversation(source_event_id=""),
+            "long source": lambda: conversation(source_event_id="x" * 129),
+            "missing timezone": lambda: conversation(occurred_at="2026-08-04T00:00:00"),
+            "invalid timestamp": lambda: conversation(occurred_at="not-a-date"),
+            "missing conversation": lambda: conversation(conversation_id=""),
+            "invalid conversation channel": lambda: conversation(channel="email"),
             "zero quantity": lambda: outbound_delivered_message(source_event_id="x", occurred_at=NOW, quantity="0"),
             "negative quantity": lambda: ai_reply_handling(source_event_id="x", occurred_at=NOW, quantity="-1"),
             "too precise": lambda: ai_assist_action_over_allowance(source_event_id="x", occurred_at=NOW, quantity="1.0001"),
             "fractional count": lambda: outbound_delivered_message(source_event_id="x", occurred_at=NOW, quantity="1.5"),
-            "quantity overflow": lambda: conversation_24h(source_event_id="x", occurred_at=NOW,
-                                                            quantity="9223372036854775.808"),
             "zero duration": lambda: voice_ai_started_minute(source_event_id="x", occurred_at=NOW, duration_seconds="0"),
             "fractional duration": lambda: voice_ai_started_minute(source_event_id="x", occurred_at=NOW,
                                                                     duration_seconds="1.5"),
@@ -111,36 +155,26 @@ class FeatureBuilderContractTests(unittest.TestCase):
                                                                            provider="", provider_event_id="call"),
             "missing inbound event": lambda: inbound_voice_minute(source_event_id="x", occurred_at=NOW,
                                                                     provider="Carrier", provider_event_id=""),
-            "negative provider amount": lambda: other_provider_charge(source_event_id="x", occurred_at=NOW,
-                                                                        provider="Carrier", provider_event_id="fee",
-                                                                        provider_amount_minor="-1"),
-            "provider amount overflow": lambda: other_provider_charge(source_event_id="x", occurred_at=NOW,
-                                                                        provider="Carrier", provider_event_id="fee",
-                                                                        provider_amount_minor="9223372036854775808"),
-            "too many attributes": lambda: conversation_24h(source_event_id="x", occurred_at=NOW,
-                                                              metadata={"attributes": {str(i): i for i in range(33)}}),
-            "non-finite attribute": lambda: conversation_24h(source_event_id="x", occurred_at=NOW,
-                                                               metadata={"attributes": {"score": math.inf}}),
-            "unknown top-level metadata": lambda: conversation_24h(source_event_id="x", occurred_at=NOW,
-                                                                      metadata={"custom": "value"}),
+            "negative provider amount": lambda: pass_through(provider_amount_minor="-1"),
+            "provider amount overflow": lambda: pass_through(provider_amount_minor="9223372036854775808"),
+            "too many attributes": lambda: conversation(metadata={"attributes": {str(i): i for i in range(33)}}),
+            "non-finite attribute": lambda: conversation(metadata={"attributes": {"score": math.inf}}),
+            "unknown top-level metadata": lambda: conversation(metadata={"custom": "value"}),
         }
         for name, build in cases.items():
             with self.subTest(name=name), self.assertRaises(ValueError):
                 build()
 
     def test_exact_boundaries_match_the_worker_contract(self):
-        self.assertEqual(conversation_24h(source_event_id="x" * 128, occurred_at=NOW,
-                                          quantity="1")["quantity"], "1")
-        self.assertEqual(conversation_24h(source_event_id="max", occurred_at=NOW,
-                                          quantity="9223372036854775")["quantity"],
-                         "9223372036854775")
+        self.assertEqual(conversation(source_event_id="x" * 128)["quantity"], "1")
         self.assertEqual(telephony_voice_minute(source_event_id="minutes", occurred_at=NOW, provider="Carrier",
                                                 provider_event_id="minutes", billable_minutes="0.001")["quantity"], "0.001")
         self.assertEqual(voice_ai_started_minute(source_event_id="duration", occurred_at=NOW,
                                                  duration_seconds="9223372036854775807")["duration_seconds"],
                          "9223372036854775807")
-        self.assertEqual(other_provider_charge(source_event_id="amount", occurred_at=NOW, provider="Carrier",
-                                               provider_event_id="fee", provider_amount_minor="9223372036854775807")
+        self.assertEqual(pass_through(source_event_id="amount", provider_event_id="fee",
+                                     provider_amount_minor="9223372036854775807",
+                                     original_amount_minor="9223372036854775807")
                          ["provider_amount_minor"], "9223372036854775807")
 
     def test_readme_feature_matrix_names_real_exported_symbols(self):
@@ -148,7 +182,7 @@ class FeatureBuilderContractTests(unittest.TestCase):
         contracts = {
             "conversation_24h": ("Conversation24HConsumptionRequest", "conversation_24h", "consume_conversation_24h"),
             "outbound_delivered_message": ("OutboundDeliveredMessageConsumptionRequest", "outbound_delivered_message", "consume_outbound_delivered_message"),
-            "ai_assist_action_over_allowance": ("AIAssistActionOverAllowanceConsumptionRequest", "ai_assist_action_over_allowance", "consume_ai_assist_action_over_allowance"),
+            "ai_assist_action_over_allowance": ("AIAssistActionConsumptionRequest", "ai_assist_action", "consume_ai_assist_action"),
             "voice_ai_started_minute": ("VoiceAIStartedMinuteConsumptionRequest", "voice_ai_started_minute", "consume_voice_ai_started_minute"),
             "ai_reply_handling": ("AIReplyHandlingConsumptionRequest", "ai_reply_handling", "consume_ai_reply_handling"),
             "whatsapp_meta_marketing_msg": ("WhatsAppMetaMarketingMessageConsumptionRequest", "whatsapp_meta_marketing_message", "consume_whatsapp_meta_marketing_message"),
@@ -172,7 +206,8 @@ class FeatureClientContractTests(unittest.TestCase):
         requests = []
         client = MizanClient("https://billing.test", "secret", transport=lambda request, timeout:
                              (requests.append(request) or (201, {}, b'{"data":{"accepted":true}}')))
-        client.consume_conversation_24h("business-1", source_event_id="a", occurred_at=NOW)
+        client.consume_conversation_24h("business-1", source_event_id="a", occurred_at=NOW,
+                                        conversation_id="conversation-a", channel=Channel.WHATSAPP)
         client.consume_outbound_delivered_message("business-1", source_event_id="b", occurred_at=NOW)
         client.consume_ai_assist_action_over_allowance("business-1", source_event_id="c", occurred_at=NOW)
         client.consume_voice_ai_started_minute("business-1", source_event_id="d", occurred_at=NOW,
@@ -187,7 +222,9 @@ class FeatureClientContractTests(unittest.TestCase):
                                             billable_minutes="2.5")
         client.consume_other_provider_charge("business-1", source_event_id="i", occurred_at=NOW,
                                              provider="Carrier", provider_event_id="INV-i",
-                                             provider_amount_minor="337")
+                                             provider_amount_minor="337", provider_invoice_id="INV-i",
+                                             original_amount_minor="337", original_currency="SAR",
+                                             tariff_version="carrier-v1")
         bodies = [json.loads(request.data) for request in requests]
         self.assertEqual([body["feature_code"] for body in bodies], list(values(FeatureCode)))
         for index in (0, 1, 2, 4, 5, 6):
@@ -196,6 +233,7 @@ class FeatureClientContractTests(unittest.TestCase):
         self.assertNotIn("quantity", bodies[3])
         self.assertEqual(bodies[7]["quantity"], "2.5")
         self.assertEqual(bodies[8]["provider_amount_minor"], "337")
+        self.assertEqual(bodies[8]["metadata"]["provider_invoice_id"], "INV-i")
         self.assertNotIn("quantity", bodies[8])
         self.assertTrue(all(request.full_url.endswith("/v1/businesses/business-1/consumptions") for request in requests))
 

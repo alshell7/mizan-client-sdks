@@ -12,7 +12,8 @@ import (
 
 func consumeEveryFeature(ctx context.Context, client *mizan.Client, businessID string, occurredAt time.Time) error {
 	if _, err := client.ConsumeConversation24H(ctx, businessID, mizan.Conversation24HUsage{
-		SourceEventID: "conversation-1", OccurredAt: occurredAt, // Quantity defaults to one.
+		SourceEventID: "conversation-activity-1", OccurredAt: occurredAt,
+		ConversationID: "conversation-1", Channel: mizan.ChannelWhatsApp, // Mizan decides whether the window is new.
 	}, "consume:conversation-1"); err != nil {
 		return err
 	}
@@ -21,9 +22,9 @@ func consumeEveryFeature(ctx context.Context, client *mizan.Client, businessID s
 	}, "consume:message-1"); err != nil {
 		return err
 	}
-	if _, err := client.ConsumeAIAssistActionOverAllowance(ctx, businessID, mizan.AIAssistActionOverAllowanceUsage{
-		SourceEventID: "assist-overage-1", OccurredAt: occurredAt,
-	}, "consume:assist-overage-1"); err != nil {
+	if _, err := client.ConsumeAIAssistAction(ctx, businessID, mizan.AIAssistActionUsage{
+		SourceEventID: "assist-action-1", OccurredAt: occurredAt, // Report every action; Mizan applies the allowance.
+	}, "consume:assist-action-1"); err != nil {
 		return err
 	}
 	if _, err := client.ConsumeVoiceAIStartedMinute(ctx, businessID, mizan.VoiceAIStartedMinuteUsage{
@@ -54,7 +55,8 @@ func consumeEveryFeature(ctx context.Context, client *mizan.Client, businessID s
 	}
 	if _, err := client.ConsumeOtherProviderCharge(ctx, businessID, mizan.OtherProviderChargeUsage{
 		SourceEventID: "provider-fee-1", OccurredAt: occurredAt, Provider: "Carrier", ProviderEventID: "INV1",
-		ProviderAmountMinor: "337", Metadata: &mizan.UsageMetadata{ProviderInvoiceID: "INV-2026-08", TariffVersion: "carrier-v4"},
+		ProviderAmountMinor: "337", ProviderInvoiceID: "INV-2026-08", OriginalAmountMinor: "25",
+		OriginalCurrency: "USD", TariffVersion: "carrier-v4", FXRule: "USD-SAR-2026-08-04",
 	}, "consume:provider-fee-1"); err != nil {
 		return err
 	}

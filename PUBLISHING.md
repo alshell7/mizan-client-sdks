@@ -1,20 +1,26 @@
 # Publishing
 
-Releases are owned by `alshell7`. Publish only from a clean `main` commit after SDK CI is green.
+Releases are owned by `alshell7`. Python releases are built and published automatically from package changes pushed
+or merged to `main`; the publishing environment accepts deployments from `main` only.
 
 ## Python / PyPI
 
-The distribution name is `mizan-billing`, version `1.6.0`; the import is `mizan`.
+The distribution name is `mizan-billing`; the import is `mizan`. Read the release version from
+`mizan-python/pyproject.toml` and confirm it matches `mizan-python/src/mizan/_version.py`.
 
-1. In PyPI, add a pending trusted publisher for repository `alshell7/mizan-client-sdks`, workflow
+1. In PyPI, configure the trusted publisher for repository `alshell7/mizan-client-sdks`, workflow
    `publish-python.yml`, environment `pypi`.
-2. In GitHub, create the protected `pypi` environment and restrict it to release tags.
-3. Confirm `pyproject.toml` and `mizan/_version.py` have the same version.
-4. Run the build and `twine check` locally.
-5. Push tag `mizan-python-v1.6.0`. GitHub Actions builds once and publishes that artifact via OIDC;
-   no long-lived PyPI token is stored.
+2. In GitHub, create the protected `pypi` environment and limit deployments to `main`. Do not add a required-reviewer
+   rule when unattended main-branch publishing is desired.
+3. For every publish-triggering Python package change, choose a new immutable version and set it in both
+   `mizan-python/pyproject.toml` and `mizan-python/src/mizan/_version.py`.
+4. Run the Python test, type-check, build, and `twine check` commands locally and merge only after SDK CI is green.
+5. Merge or push the package change to `main`. The publishing workflow rebuilds and checks the distributions, then
+   publishes through the main-only `pypi` environment with a short-lived OIDC credential. It has no pull-request
+   trigger and stores no long-lived PyPI token.
 
-PyPI versions are immutable. If a publish partially succeeds, increment the version; never overwrite it.
+The workflow is serialized and does not cancel an in-flight publish. PyPI versions are immutable: if a publish
+partially succeeds, increment the version; never overwrite or silently skip an existing release.
 
 ## Go
 
@@ -22,9 +28,10 @@ The module path is `github.com/alshell7/mizan-client-sdks/mizan-go`. From the re
 subdirectory-aware module tag:
 
 ```bash
-git tag -s mizan-go/v1.6.0 -m "mizan-go v1.6.0"
-git push origin mizan-go/v1.6.0
-GOPROXY=https://proxy.golang.org go list -m github.com/alshell7/mizan-client-sdks/mizan-go@v1.6.0
+VERSION=1.8.0
+git tag -s "mizan-go/v$VERSION" -m "mizan-go v$VERSION"
+git push origin "mizan-go/v$VERSION"
+GOPROXY=https://proxy.golang.org go list -m "github.com/alshell7/mizan-client-sdks/mizan-go@v$VERSION"
 ```
 
-Do not use a root `v1.6.0` tag for this monorepo layout.
+Do not use a root `v$VERSION` tag for this monorepo layout.

@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.8.0 - 2026-08-11
+
+- Align Go and Python feature helpers with the authoritative metering contract: conversation activity now requires
+  stable conversation/channel identity, and every AI-assist action is reported so Mizan owns allowance accounting.
+- Require complete pass-through evidence (provider invoice, original amount/currency, tariff version, and an FX rule
+  for non-SAR originals) before either SDK sends an `other_provider_charge` request.
+- Expose conversation-window and AI-allowance decision details in typed consumption charge results.
+- Type billing-summary `as_of` and subscription `effective_status` so interfaces do not treat a stored-but-expired
+  lifecycle row as currently active.
+- Document that one `source_event_id` is one atomic multi-feature decision, usage is accepted only in the currently
+  open subscription month, and production runtime credentials are scoped to one business.
+- Add complete lifecycle and durable webhook-receiver examples for both SDKs.
+- Publish Python releases from protected `main` pushes with short-lived PyPI OIDC credentials and package
+  attestations, after isolated build, test, type-check, and metadata validation jobs succeed.
+
 ## 1.7.0 - 2026-08-06
 
 - Add a read-only balance impact preview for consumption, Azeer Unit and provider funding, provider refunds, promotional grants, and feature budgets.

@@ -86,7 +86,7 @@ class FeatureCode(StrEnum):
     """Versioned feature metering and pricing contract."""
     CONVERSATION_24H = "conversation_24h"  # Fixed conversation windows priced in Azeer Units.
     OUTBOUND_DELIVERED_MESSAGE = "outbound_delivered_message"  # Product delivery only; provider fee is separate.
-    AI_ASSIST_ACTION_OVER_ALLOWANCE = "ai_assist_action_over_allowance"  # Caller establishes allowance exhaustion.
+    AI_ASSIST_ACTION_OVER_ALLOWANCE = "ai_assist_action_over_allowance"  # Legacy wire name; report every action and let Mizan apply allowance.
     VOICE_AI_STARTED_MINUTE = "voice_ai_started_minute"  # Raw seconds rounded up by Mizan.
     AI_REPLY_HANDLING = "ai_reply_handling"  # Included audit/fair-use event in the default catalog.
     WHATSAPP_META_MARKETING_MSG = "whatsapp_meta_marketing_msg"  # Meta provider tariff and event ID required.

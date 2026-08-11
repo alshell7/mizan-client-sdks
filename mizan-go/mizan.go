@@ -10,13 +10,14 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
 // Version is the SDK version sent in the HTTP User-Agent header.
-const Version = "1.7.0"
+const Version = "1.8.0"
 
 // ExactAmount is an exact base-10 integer string. Money uses halala and Azeer
 // Units use milliunits; never construct these values through float64 arithmetic.
@@ -60,7 +61,8 @@ const (
 	FeatureConversation24H FeatureCode = "conversation_24h"
 	// FeatureOutboundDeliveredMessage records product delivery; provider fees are separate.
 	FeatureOutboundDeliveredMessage FeatureCode = "outbound_delivered_message"
-	// FeatureAIAssistOverAllowance is used only after included allowance is exhausted.
+	// FeatureAIAssistOverAllowance is the wire feature code for every AI-assist
+	// action. Mizan, not the caller, applies the monthly allowance.
 	FeatureAIAssistOverAllowance FeatureCode = "ai_assist_action_over_allowance"
 	// FeatureVoiceAIStartedMinute accepts raw seconds and rounds up inside Mizan.
 	FeatureVoiceAIStartedMinute FeatureCode = "voice_ai_started_minute"
@@ -268,6 +270,26 @@ type ActivationResult struct {
 	Balances                  Balance     `json:"balances"`
 }
 
+// AllowanceDecision explains the server-owned monthly AI-assist allowance decision.
+// All values are exact milli-count strings (one reported action is 1,000).
+type AllowanceDecision struct {
+	LimitQuantityMillis    ExactAmount `json:"limit_quantity_millis"`
+	ConsumedBeforeMillis   ExactAmount `json:"consumed_before_millis"`
+	ConsumedAfterMillis    ExactAmount `json:"consumed_after_millis"`
+	BillableQuantityMillis ExactAmount `json:"billable_quantity_millis"`
+}
+
+// ChargeResult is one server-normalized component decision.
+type ChargeResult struct {
+	Rail                   string             `json:"rail"`
+	QuantityMillis         ExactAmount        `json:"quantity_millis"`
+	ReportedQuantityMillis ExactAmount        `json:"reported_quantity_millis"`
+	UnitMillis             ExactAmount        `json:"unit_millis"`
+	MoneyMinor             ExactAmount        `json:"money_minor"`
+	Treatment              *string            `json:"treatment"`
+	Allowance              *AllowanceDecision `json:"allowance"`
+}
+
 // ConsumptionResult is the authoritative all-or-nothing decision for one source event.
 type ConsumptionResult struct {
 	// Accepted is true only when every component and related record committed atomically.
@@ -279,8 +301,9 @@ type ConsumptionResult struct {
 	LedgerEntryID string `json:"ledger_entry_id"`
 	// BusinessSequence orders downstream ledger replication for this business.
 	BusinessSequence int64 `json:"business_sequence"`
-	// Charges contains normalized exact per-component rail amounts.
-	Charges []map[string]any `json:"charges"`
+	// Charges contains normalized exact per-component rail amounts, including
+	// the server-owned AI-assist allowance decision when applicable.
+	Charges []ChargeResult `json:"charges"`
 	// AllocationsByFeature identifies Azeer credit lots consumed by each component.
 	AllocationsByFeature []map[string]any       `json:"allocations_by_feature"`
 	Totals               map[string]ExactAmount `json:"totals"`
@@ -303,16 +326,30 @@ type LedgerResult struct {
 	NextAfterSequence *int64           `json:"next_after_sequence"`
 }
 
-// BillingSummaryResult is the current account view for billing and support interfaces.
+// SubscriptionSummary distinguishes persisted lifecycle state from its effective
+// projection at the enclosing BillingSummaryResult.AsOf instant.
+type SubscriptionSummary struct {
+	ID                 string         `json:"id"`
+	Status             string         `json:"status"`
+	EffectiveStatus    string         `json:"effective_status"`
+	Snapshot           map[string]any `json:"snapshot"`
+	CurrentPeriodStart time.Time      `json:"current_period_start"`
+	CurrentPeriodEnd   time.Time      `json:"current_period_end"`
+	CancelAtPeriodEnd  bool           `json:"cancel_at_period_end"`
+}
+
+// BillingSummaryResult is the server-authoritative account view for billing and support interfaces.
 type BillingSummaryResult struct {
-	BusinessID   string           `json:"business_id"`
-	Account      map[string]any   `json:"account"`
-	Subscription map[string]any   `json:"subscription"`
-	Balances     Balance          `json:"balances"`
-	CreditLots   []map[string]any `json:"credit_lots"`
-	Budgets      []map[string]any `json:"budgets"`
-	Pauses       []map[string]any `json:"pauses"`
-	Replication  map[string]any   `json:"replication"`
+	BusinessID   string                      `json:"business_id"`
+	AsOf         time.Time                   `json:"as_of"`
+	Account      map[string]any              `json:"account"`
+	Subscription *SubscriptionSummary        `json:"subscription"`
+	Balances     Balance                     `json:"balances"`
+	CreditLots   []map[string]any            `json:"credit_lots"`
+	Budgets      []map[string]any            `json:"budgets"`
+	Pauses       []map[string]any            `json:"pauses"`
+	Replication  map[string]any              `json:"replication"`
+	Delivery     DeliveryConfigurationResult `json:"delivery"`
 }
 
 // DecodeData converts an API response's data field into a documented result type
@@ -454,7 +491,10 @@ type ConsumptionComponent struct {
 }
 
 // ConsumptionRequest records either one top-level feature or one to ten Components.
-// All components are accepted and charged together or rejected without partial debit.
+// SourceEventID identifies this entire atomic billing decision: never reuse it for a
+// later request or split one product event across requests with the same value. All
+// components are accepted and charged together or rejected without partial debit.
+// OccurredAt must belong to the active subscription's current open monthly period.
 type ConsumptionRequest struct {
 	SourceEventID       string                 `json:"source_event_id"`
 	OccurredAt          time.Time              `json:"occurred_at"`
@@ -551,7 +591,11 @@ type Logger func(event string, fields map[string]any)
 type Client struct {
 	BaseURL string
 	// Token is a server credential and must never be logged or shipped to client applications.
+	// Production tokens are scoped by the Mizan Worker to one business.
 	Token string
+	// BusinessID binds a production client to the business authorized by Token.
+	// An empty value is retained for development and trusted platform compatibility.
+	BusinessID string
 	// HTTPClient controls timeouts, transports, and connection reuse; nil uses a 10-second client.
 	HTTPClient *http.Client
 	// MaxAttempts applies to mutation retries only and defaults to three.
@@ -605,7 +649,9 @@ type DeliveryConfigurationResult struct {
 	Endpoints []*DeliveryEndpoint `json:"endpoints"`
 }
 
-// NewClient creates a client with a 10-second HTTP timeout and three mutation attempts.
+// NewClient creates an unbound client with a 10-second HTTP timeout and three
+// mutation attempts. Prefer NewBusinessClient for production runtime access;
+// unbound clients are for development and explicitly trusted platform deployments.
 // baseURL must be absolute HTTP(S) without credentials, query, or fragment.
 func NewClient(baseURL, token string) (*Client, error) {
 	baseURL = strings.TrimRight(baseURL, "/")
@@ -620,6 +666,20 @@ func NewClient(baseURL, token string) (*Client, error) {
 		return nil, fmt.Errorf("mizan: invalid base URL: %w", err)
 	}
 	return &Client{BaseURL: baseURL, Token: token, HTTPClient: &http.Client{Timeout: 10 * time.Second}, MaxAttempts: 3}, nil
+}
+
+// NewBusinessClient creates the recommended production client and binds its token
+// to one business. Requests for another business fail locally before any HTTP call.
+func NewBusinessClient(baseURL, token, businessID string) (*Client, error) {
+	client, err := NewClient(baseURL, token)
+	if err != nil {
+		return nil, err
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`).MatchString(businessID) {
+		return nil, errors.New("mizan: business ID has an invalid format")
+	}
+	client.BusinessID = businessID
+	return client, nil
 }
 
 // AdminClient uses a dedicated Admin Worker token for attributed control-plane operations.
@@ -859,6 +919,9 @@ func (c *Client) mutate(ctx context.Context, method, path, businessID string, in
 }
 
 func (c *Client) request(ctx context.Context, method, path, businessID string, in any, key string, mutation bool) (Response, error) {
+	if c.BusinessID != "" && businessID != "" && businessID != c.BusinessID {
+		return nil, fmt.Errorf("mizan: client token is scoped to business %q, not %q", c.BusinessID, businessID)
+	}
 	return c.requestWithHeaders(ctx, method, path, businessID, in, key, mutation, nil)
 }
 

@@ -13,13 +13,16 @@ from typing import Any, cast
 
 from .enums import (BudgetAction, BudgetMetric, BudgetPeriod, Channel, Currency,
                     FeatureCode, PaymentStatus, RefundStatus)
-from .models import (AIAssistActionOverAllowanceConsumptionRequest,
+from .models import (AIAssistActionConsumptionRequest,
+                     AIAssistActionOverAllowanceConsumptionRequest,
                      AIReplyHandlingConsumptionRequest, BudgetRequest,
                      ConfirmedTopUp, Conversation24HConsumptionRequest,
+                     ConversationUsageMetadata,
                      InboundVoiceMinuteConsumptionRequest,
                      OtherProviderChargeConsumptionRequest,
                      OutboundDeliveredMessageConsumptionRequest,
-                     ProviderRefundRequest, ProviderUsageMetadata,
+                     PassThroughProviderUsageMetadata, ProviderRefundRequest,
+                     ProviderUsageMetadata,
                      TelephonyVoiceMinuteConsumptionRequest, UsageMetadata,
                      VoiceAIStartedMinuteConsumptionRequest,
                      WhatsAppMetaMarketingMessageConsumptionRequest)
@@ -114,7 +117,8 @@ def _integer(value: str, field: str, *, allow_zero: bool = False) -> None:
         raise ValueError(f"{field} must be {qualifier} and fit the supported exact range")
 
 
-def _validate_metadata(metadata: UsageMetadata | ProviderUsageMetadata | None) -> None:
+def _validate_metadata(metadata: UsageMetadata | ProviderUsageMetadata | ConversationUsageMetadata
+                       | PassThroughProviderUsageMetadata | None) -> None:
     """Bound optional attribution to the Worker's small scalar metadata contract."""
     if metadata is None:
         return
@@ -154,7 +158,8 @@ def _validate_metadata(metadata: UsageMetadata | ProviderUsageMetadata | None) -
 
 
 def _count_usage(feature_code: FeatureCode, *, source_event_id: str, occurred_at: str,
-                 quantity: str, metadata: UsageMetadata | ProviderUsageMetadata | None,
+                 quantity: str, metadata: UsageMetadata | ProviderUsageMetadata
+                 | ConversationUsageMetadata | None,
                  whole_count: bool = True) -> dict[str, Any]:
     """Build the shared wire shape only after every local fact has passed validation."""
     _event(source_event_id, occurred_at)
@@ -182,12 +187,28 @@ def _provider_metadata(*, provider: str, provider_event_id: str,
     return cast(ProviderUsageMetadata, result)
 
 
-def conversation_24h(*, source_event_id: str, occurred_at: str, quantity: str = "1",
+def _required_metadata_string(value: str, field: str) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value.strip()) > 512:
+        raise ValueError(f"{field} must contain 1 to 512 characters")
+    return value.strip()
+
+
+def conversation_24h(*, source_event_id: str, occurred_at: str, conversation_id: str,
+                     channel: Channel,
                      metadata: UsageMetadata | None = None) -> Conversation24HConsumptionRequest:
-    """Build ``conversation_24h``. One quantity is one fixed 24-hour conversation window."""
+    """Report conversation activity; Mizan owns opening and deduplicating the 24-hour window."""
+    _validate_metadata(metadata)
+    resolved_channel = str(channel)
+    if resolved_channel not in {item.value for item in Channel}:
+        raise ValueError("channel is not a supported channel")
+    resolved: dict[str, Any] = dict(metadata or {})
+    # Explicit identity wins so optional caller metadata cannot redirect window accounting.
+    resolved["conversation_id"] = _required_metadata_string(conversation_id, "conversation_id")
+    resolved["channel"] = resolved_channel
     return cast(Conversation24HConsumptionRequest, _count_usage(
         FeatureCode.CONVERSATION_24H, source_event_id=source_event_id,
-        occurred_at=occurred_at, quantity=quantity, metadata=metadata))
+        occurred_at=occurred_at, quantity="1",
+        metadata=cast(ConversationUsageMetadata, resolved)))
 
 
 def outbound_delivered_message(*, source_event_id: str, occurred_at: str, quantity: str = "1",
@@ -200,10 +221,18 @@ def outbound_delivered_message(*, source_event_id: str, occurred_at: str, quanti
 
 def ai_assist_action_over_allowance(*, source_event_id: str, occurred_at: str, quantity: str = "1",
                                     metadata: UsageMetadata | None = None) -> AIAssistActionOverAllowanceConsumptionRequest:
-    """Build ``ai_assist_action_over_allowance`` after the included allowance is exhausted."""
+    """Report every AI-assist action; Mizan decides included versus over-allowance quantity."""
     return cast(AIAssistActionOverAllowanceConsumptionRequest, _count_usage(
         FeatureCode.AI_ASSIST_ACTION_OVER_ALLOWANCE, source_event_id=source_event_id,
         occurred_at=occurred_at, quantity=quantity, metadata=metadata))
+
+
+def ai_assist_action(*, source_event_id: str, occurred_at: str, quantity: str = "1",
+                     metadata: UsageMetadata | None = None) -> AIAssistActionConsumptionRequest:
+    """Preferred semantic alias for reporting every AI-assist action."""
+    return ai_assist_action_over_allowance(
+        source_event_id=source_event_id, occurred_at=occurred_at,
+        quantity=quantity, metadata=metadata)
 
 
 def ai_reply_handling(*, source_event_id: str, occurred_at: str, quantity: str = "1",
@@ -260,11 +289,31 @@ def inbound_voice_minute(*, source_event_id: str, occurred_at: str, provider: st
 
 def other_provider_charge(*, source_event_id: str, occurred_at: str, provider: str,
                           provider_event_id: str, provider_amount_minor: str,
+                          provider_invoice_id: str, original_amount_minor: str,
+                          original_currency: str, tariff_version: str,
+                          fx_rule: str | None = None,
                           metadata: UsageMetadata | None = None) -> OtherProviderChargeConsumptionRequest:
-    """Build an exact pass-through provider settlement amount in halala; zero is valid."""
+    """Build pass-through SAR settlement with complete provider invoice evidence."""
     _event(source_event_id, occurred_at)
     _integer(provider_amount_minor, "provider_amount_minor", allow_zero=True)
+    _integer(original_amount_minor, "original_amount_minor", allow_zero=True)
+    currency = _required_metadata_string(original_currency, "original_currency").upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("original_currency must be a three-letter ISO currency")
+    if currency == "SAR" and original_amount_minor != provider_amount_minor:
+        raise ValueError("SAR provider_amount_minor must equal original_amount_minor")
+    if currency != "SAR" and (not isinstance(fx_rule, str) or not fx_rule.strip()):
+        raise ValueError("fx_rule is required when original_currency is not SAR")
     provider_metadata = _provider_metadata(provider=provider, provider_event_id=provider_event_id, metadata=metadata)
+    evidence: dict[str, Any] = dict(provider_metadata)
+    evidence.update({
+        "provider_invoice_id": _required_metadata_string(provider_invoice_id, "provider_invoice_id"),
+        "original_amount_minor": original_amount_minor,
+        "original_currency": currency,
+        "tariff_version": _required_metadata_string(tariff_version, "tariff_version"),
+    })
+    if fx_rule is not None:
+        evidence["fx_rule"] = _required_metadata_string(fx_rule, "fx_rule")
     return {"source_event_id": source_event_id, "occurred_at": occurred_at,
             "feature_code": "other_provider_charge", "provider_amount_minor": provider_amount_minor,
-            "metadata": provider_metadata}
+            "metadata": cast(PassThroughProviderUsageMetadata, evidence)}

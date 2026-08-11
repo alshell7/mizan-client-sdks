@@ -11,13 +11,14 @@ import (
 	"time"
 )
 
-// Conversation24HUsage is the contract for conversation_24h. Quantity is the
-// number of fixed 24-hour conversation windows and defaults to one when empty.
+// Conversation24HUsage reports conversation activity. Mizan owns the fixed
+// 24-hour window and decides whether this activity opens a billable window.
 type Conversation24HUsage struct {
-	SourceEventID string
-	OccurredAt    time.Time
-	Quantity      ExactAmount
-	Metadata      *UsageMetadata
+	SourceEventID  string
+	OccurredAt     time.Time
+	ConversationID string
+	Channel        Channel
+	Metadata       *UsageMetadata
 }
 
 // OutboundDeliveredMessageUsage is the contract for
@@ -30,15 +31,18 @@ type OutboundDeliveredMessageUsage struct {
 	Metadata      *UsageMetadata
 }
 
-// AIAssistActionOverAllowanceUsage is the contract for
-// ai_assist_action_over_allowance. Call it only after the product has established
-// that the plan's included allowance is exhausted. Quantity defaults to one.
-type AIAssistActionOverAllowanceUsage struct {
+// AIAssistActionUsage reports every AI-assist action. Mizan owns the subscription-
+// month allowance counter and charges only the quantity above the allowance.
+type AIAssistActionUsage struct {
 	SourceEventID string
 	OccurredAt    time.Time
 	Quantity      ExactAmount
 	Metadata      *UsageMetadata
 }
+
+// AIAssistActionOverAllowanceUsage is retained for source compatibility.
+// Deprecated: use AIAssistActionUsage; callers must report every action.
+type AIAssistActionOverAllowanceUsage = AIAssistActionUsage
 
 // AIReplyHandlingUsage is the contract for ai_reply_handling. The default
 // catalog records it as included/zero-charge usage. Quantity defaults to one.
@@ -102,6 +106,11 @@ type OtherProviderChargeUsage struct {
 	Provider            string
 	ProviderEventID     string
 	ProviderAmountMinor ExactAmount
+	ProviderInvoiceID   string
+	OriginalAmountMinor ExactAmount
+	OriginalCurrency    string
+	TariffVersion       string
+	FXRule              string
 	Metadata            *UsageMetadata
 }
 
@@ -265,9 +274,6 @@ func providerMetadata(provider, eventID string, source *UsageMetadata) (*UsageMe
 	if strings.TrimSpace(provider) == "" || strings.TrimSpace(eventID) == "" {
 		return nil, errors.New("mizan: provider and provider event ID are required for provider-priced usage")
 	}
-	if err := validateMetadata(source); err != nil {
-		return nil, err
-	}
 	metadata := UsageMetadata{}
 	if source != nil {
 		// Copy the value so canonical provider fields do not mutate caller-owned metadata.
@@ -276,6 +282,9 @@ func providerMetadata(provider, eventID string, source *UsageMetadata) (*UsageMe
 	// Required method arguments take precedence over conflicting optional metadata.
 	metadata.Provider = strings.TrimSpace(provider)
 	metadata.ProviderEventID = strings.TrimSpace(eventID)
+	if err := validateMetadata(&metadata); err != nil {
+		return nil, err
+	}
 	return &metadata, nil
 }
 
@@ -312,9 +321,33 @@ func providerQuantityRequest(feature FeatureCode, sourceEventID string, occurred
 		FeatureCode: feature, Quantity: string(quantity), Metadata: metadata}, nil
 }
 
-// ConsumeConversation24H records one or more fixed 24-hour conversation windows.
+func conversationMetadata(conversationID string, channel Channel, source *UsageMetadata) (*UsageMetadata, error) {
+	if strings.TrimSpace(conversationID) == "" || channel == "" {
+		return nil, errors.New("mizan: conversation ID and channel are required for conversation activity")
+	}
+	if err := validateMetadata(source); err != nil {
+		return nil, err
+	}
+	metadata := UsageMetadata{}
+	if source != nil {
+		metadata = *source
+	}
+	metadata.ConversationID = strings.TrimSpace(conversationID)
+	metadata.Channel = channel
+	if err := validateMetadata(&metadata); err != nil {
+		return nil, err
+	}
+	return &metadata, nil
+}
+
+// ConsumeConversation24H reports one conversation activity. Mizan opens or
+// deduplicates the 24-hour window identified by conversation ID and channel.
 func (c *Client) ConsumeConversation24H(ctx context.Context, businessID string, in Conversation24HUsage, idempotencyKey string) (Response, error) {
-	request, err := countRequest(FeatureConversation24H, in.SourceEventID, in.OccurredAt, in.Quantity, in.Metadata)
+	metadata, err := conversationMetadata(in.ConversationID, in.Channel, in.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	request, err := countRequest(FeatureConversation24H, in.SourceEventID, in.OccurredAt, "1", metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -330,13 +363,20 @@ func (c *Client) ConsumeOutboundDeliveredMessage(ctx context.Context, businessID
 	return c.Consume(ctx, businessID, request, idempotencyKey)
 }
 
-// ConsumeAIAssistActionOverAllowance records actions after the caller establishes allowance exhaustion.
-func (c *Client) ConsumeAIAssistActionOverAllowance(ctx context.Context, businessID string, in AIAssistActionOverAllowanceUsage, idempotencyKey string) (Response, error) {
+// ConsumeAIAssistAction reports every action. Inspect ChargeResult.Allowance for
+// the authoritative included-versus-billable decision.
+func (c *Client) ConsumeAIAssistAction(ctx context.Context, businessID string, in AIAssistActionUsage, idempotencyKey string) (Response, error) {
 	request, err := countRequest(FeatureAIAssistOverAllowance, in.SourceEventID, in.OccurredAt, in.Quantity, in.Metadata)
 	if err != nil {
 		return nil, err
 	}
 	return c.Consume(ctx, businessID, request, idempotencyKey)
+}
+
+// ConsumeAIAssistActionOverAllowance is retained for source compatibility.
+// Deprecated: use ConsumeAIAssistAction and report every action.
+func (c *Client) ConsumeAIAssistActionOverAllowance(ctx context.Context, businessID string, in AIAssistActionOverAllowanceUsage, idempotencyKey string) (Response, error) {
+	return c.ConsumeAIAssistAction(ctx, businessID, in, idempotencyKey)
 }
 
 // ConsumeAIReplyHandling records included handling for audit and fair-use visibility.
@@ -410,8 +450,32 @@ func (c *Client) ConsumeOtherProviderCharge(ctx context.Context, businessID stri
 	if err := validateExactInteger(in.ProviderAmountMinor, "provider amount minor", true); err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(in.ProviderInvoiceID) == "" || strings.TrimSpace(in.OriginalCurrency) == "" || strings.TrimSpace(in.TariffVersion) == "" {
+		return nil, errors.New("mizan: provider invoice ID, original currency, and tariff version are required for pass-through usage")
+	}
+	if err := validateExactInteger(in.OriginalAmountMinor, "original amount minor", true); err != nil {
+		return nil, err
+	}
+	currency := strings.ToUpper(strings.TrimSpace(in.OriginalCurrency))
+	if !regexp.MustCompile(`^[A-Z]{3}$`).MatchString(currency) {
+		return nil, errors.New("mizan: original currency must be a three-letter ISO currency code")
+	}
+	if currency != "SAR" && strings.TrimSpace(in.FXRule) == "" {
+		return nil, errors.New("mizan: non-SAR pass-through usage requires an FX rule")
+	}
+	if currency == "SAR" && in.OriginalAmountMinor != in.ProviderAmountMinor {
+		return nil, errors.New("mizan: SAR original amount must equal provider amount minor")
+	}
 	metadata, err := providerMetadata(in.Provider, in.ProviderEventID, in.Metadata)
 	if err != nil {
+		return nil, err
+	}
+	metadata.ProviderInvoiceID = strings.TrimSpace(in.ProviderInvoiceID)
+	metadata.OriginalAmountMinor = in.OriginalAmountMinor
+	metadata.OriginalCurrency = currency
+	metadata.TariffVersion = strings.TrimSpace(in.TariffVersion)
+	metadata.FXRule = strings.TrimSpace(in.FXRule)
+	if err := validateMetadata(metadata); err != nil {
 		return nil, err
 	}
 	return c.Consume(ctx, businessID, ConsumptionRequest{SourceEventID: in.SourceEventID, OccurredAt: in.OccurredAt,
@@ -421,7 +485,7 @@ func (c *Client) ConsumeOtherProviderCharge(ctx context.Context, businessID stri
 // Compatibility aliases use the same feature-specific contracts.
 // ConsumeAIAssistOverAllowance is a compatibility alias for ConsumeAIAssistActionOverAllowance.
 func (c *Client) ConsumeAIAssistOverAllowance(ctx context.Context, businessID string, in AIAssistActionOverAllowanceUsage, idempotencyKey string) (Response, error) {
-	return c.ConsumeAIAssistActionOverAllowance(ctx, businessID, in, idempotencyKey)
+	return c.ConsumeAIAssistAction(ctx, businessID, in, idempotencyKey)
 }
 
 // ConsumeVoiceAI is a compatibility alias for ConsumeVoiceAIStartedMinute.

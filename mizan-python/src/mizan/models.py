@@ -110,25 +110,26 @@ class BudgetRequest(_BudgetOptional):
     action: BudgetAction
 
 
-class _CommonUsageMetadata(TypedDict, total=False):
-    # Application actor and channel attribution used for reconciliation.
+class _ApplicationUsageMetadata(TypedDict, total=False):
+    # Application actor and attribution used for reconciliation.
     actor: dict[str, str]
-    channel: Channel
     channel_account_id: str
-    conversation_id: str
     campaign_id: str
     # Preserve both provider measurement and normalized tariff quantity when applicable.
     raw_quantity: str
     billable_quantity: str
-    # Provider invoice and pre-conversion evidence; values remain exact strings.
-    provider_invoice_id: str
-    original_amount_minor: ExactAmount
-    original_currency: str
-    # Versioned rules explain how the caller normalized provider facts.
-    fx_rule: str
-    tariff_version: str
     # At most 32 bounded scalar application facts; never include secrets or raw payloads.
     attributes: dict[str, str | int | float | bool | None]
+
+
+class _OptionalConversationAttribution(TypedDict, total=False):
+    channel: Channel
+    conversation_id: str
+
+
+class _RequiredConversationAttribution(TypedDict):
+    channel: Channel
+    conversation_id: str
 
 
 class _OptionalProviderAttribution(TypedDict, total=False):
@@ -143,7 +144,27 @@ class _RequiredProviderAttribution(TypedDict):
     provider_event_id: str
 
 
-class UsageMetadata(_CommonUsageMetadata, _OptionalProviderAttribution):
+class _OptionalProviderEvidence(TypedDict, total=False):
+    provider_invoice_id: str
+    original_amount_minor: ExactAmount
+    original_currency: str
+    fx_rule: str
+    tariff_version: str
+
+
+class _RequiredPassThroughEvidence(TypedDict):
+    provider_invoice_id: str
+    original_amount_minor: ExactAmount
+    original_currency: str
+    tariff_version: str
+
+
+class _OptionalFXEvidence(TypedDict, total=False):
+    fx_rule: str
+
+
+class UsageMetadata(_ApplicationUsageMetadata, _OptionalConversationAttribution,
+                    _OptionalProviderAttribution, _OptionalProviderEvidence):
     """Optional application attribution persisted with a usage decision.
 
     ``attributes`` accepts at most 32 small scalar facts. Do not include secrets
@@ -151,11 +172,26 @@ class UsageMetadata(_CommonUsageMetadata, _OptionalProviderAttribution):
     """
 
 
-class ProviderUsageMetadata(_CommonUsageMetadata, _RequiredProviderAttribution):
+class ProviderUsageMetadata(_ApplicationUsageMetadata, _OptionalConversationAttribution,
+                            _RequiredProviderAttribution, _OptionalProviderEvidence):
     """Attribution required for every provider-balance feature.
 
     ``provider_event_id`` is the provider-side deduplication boundary and
     ``provider`` identifies the party whose tariff or invoice caused the debit.
+    """
+
+
+class ConversationUsageMetadata(_ApplicationUsageMetadata, _RequiredConversationAttribution,
+                                _OptionalProviderAttribution, _OptionalProviderEvidence):
+    """Identity used by Mizan to own 24-hour conversation-window deduplication."""
+
+
+class PassThroughProviderUsageMetadata(_ApplicationUsageMetadata, _OptionalConversationAttribution,
+                                       _RequiredProviderAttribution, _RequiredPassThroughEvidence,
+                                       _OptionalFXEvidence):
+    """Required provider invoice, original-currency, tariff, and settlement evidence.
+
+    ``fx_rule`` is required when ``original_currency`` is not ``SAR``.
     """
 
 
@@ -178,14 +214,18 @@ class _UsageEventRequired(TypedDict):
     occurred_at: str
 
 
-class _CountConsumptionOptional(TypedDict, total=False):
+class _QuantityOptional(TypedDict, total=False):
     quantity: ExactAmount
+
+
+class _CountConsumptionOptional(_QuantityOptional, total=False):
     metadata: UsageMetadata
 
 
-class Conversation24HConsumptionRequest(_UsageEventRequired, _CountConsumptionOptional):
-    """One or more fixed 24-hour conversation windows; quantity defaults to one."""
+class Conversation24HConsumptionRequest(_UsageEventRequired, _QuantityOptional):
+    """Report conversation activity; Mizan opens/deduplicates its fixed 24-hour window."""
     feature_code: Literal["conversation_24h"]
+    metadata: ConversationUsageMetadata
 
 
 class OutboundDeliveredMessageConsumptionRequest(_UsageEventRequired, _CountConsumptionOptional):
@@ -193,9 +233,13 @@ class OutboundDeliveredMessageConsumptionRequest(_UsageEventRequired, _CountCons
     feature_code: Literal["outbound_delivered_message"]
 
 
-class AIAssistActionOverAllowanceConsumptionRequest(_UsageEventRequired, _CountConsumptionOptional):
-    """AI-assist actions after the caller establishes allowance exhaustion."""
+class AIAssistActionConsumptionRequest(_UsageEventRequired, _CountConsumptionOptional):
+    """Every AI-assist action; Mizan owns the included-allowance counter and overage."""
     feature_code: Literal["ai_assist_action_over_allowance"]
+
+
+# Compatibility name for the legacy wire feature. Callers still report every action.
+AIAssistActionOverAllowanceConsumptionRequest: TypeAlias = AIAssistActionConsumptionRequest
 
 
 class AIReplyHandlingConsumptionRequest(_UsageEventRequired, _CountConsumptionOptional):
@@ -236,10 +280,10 @@ class InboundVoiceMinuteConsumptionRequest(_UsageEventRequired, _ProviderQuantit
 
 
 class OtherProviderChargeConsumptionRequest(_UsageEventRequired):
-    """Pass-through provider amount in settlement-currency halala."""
+    """Pass-through settlement in SAR halala with complete original invoice evidence."""
     feature_code: Literal["other_provider_charge"]
     provider_amount_minor: ExactAmount
-    metadata: ProviderUsageMetadata
+    metadata: PassThroughProviderUsageMetadata
 
 
 class _MultiFeatureOptional(TypedDict, total=False):
@@ -255,7 +299,7 @@ class MultiFeatureConsumptionRequest(_UsageEventRequired, _MultiFeatureOptional)
 ConsumptionRequest: TypeAlias = (
     Conversation24HConsumptionRequest
     | OutboundDeliveredMessageConsumptionRequest
-    | AIAssistActionOverAllowanceConsumptionRequest
+    | AIAssistActionConsumptionRequest
     | AIReplyHandlingConsumptionRequest
     | VoiceAIStartedMinuteConsumptionRequest
     | WhatsAppMetaMarketingMessageConsumptionRequest
@@ -267,8 +311,29 @@ ConsumptionRequest: TypeAlias = (
 
 
 class EligibilityRequest(ChargeInput, total=False):
-    """Advisory charge preview; it reserves no funds and changes no state."""
+    """Advisory charge preview using the same feature facts as consumption."""
     components: list[ConsumptionComponent]
+
+
+class AllowanceDecision(TypedDict):
+    """Engine-owned AI-assist allowance position for the current subscription month."""
+    limit_quantity_millis: ExactAmount
+    consumed_before_millis: ExactAmount
+    consumed_after_millis: ExactAmount
+    billable_quantity_millis: ExactAmount
+
+
+class ConsumptionCharge(TypedDict):
+    """Normalized authoritative charge explanation for one component."""
+    rail: Literal["azeer_units", "provider_balance", "included"]
+    quantity_millis: ExactAmount
+    # Reported can exceed charged quantity for an already-open conversation window.
+    reported_quantity_millis: ExactAmount
+    unit_millis: ExactAmount
+    money_minor: ExactAmount
+    treatment: str | None
+    # Present for every AI-assist report and null for other features.
+    allowance: AllowanceDecision | None
 
 
 class BaseEnvelope(TypedDict):
@@ -406,7 +471,7 @@ class EligibilityResult(TypedDict, total=False):
     eligible: bool
     reason: str
     details: dict[str, Any]
-    charges: list[dict[str, Any]]
+    charges: list[ConsumptionCharge]
 
 
 class EligibilityResponse(BaseEnvelope):
@@ -439,7 +504,7 @@ class BalanceImpactPreviewResult(TypedDict, total=False):
     eligible: bool
     decision_code: str
     details: dict[str, Any]
-    charges: list[dict[str, Any]]
+    charges: list[ConsumptionCharge]
     balances: list[BalanceImpact]
     payment: dict[str, Any] | None
     budget: dict[str, Any] | None
@@ -476,7 +541,7 @@ class ConsumptionResult(TypedDict, total=False):
     ledger_entry_id: str
     business_sequence: int
     # Normalized charges and exact Azeer lot allocations for each feature component.
-    charges: list[dict[str, Any]]
+    charges: list[ConsumptionCharge]
     allocations_by_feature: list[dict[str, Any]]
     totals: dict[str, ExactAmount]
     # Post-transaction balances, not advisory eligibility projections.
@@ -535,16 +600,29 @@ class ConsumptionResponse(BaseEnvelope):
     data: ConsumptionResult
 
 
-class BillingSummaryResult(TypedDict, total=False):
-    """Current billing view for customer screens, support, and reconciliation."""
+class SubscriptionSummary(TypedDict):
+    """Persisted lifecycle row plus its server-time effective projection."""
+    id: str
+    status: Literal["active", "past_due"]
+    effective_status: Literal["active", "past_due", "upcoming", "expired"]
+    snapshot: dict[str, Any]
+    current_period_start: str
+    current_period_end: str
+    cancel_at_period_end: bool
+
+
+class BillingSummaryResult(TypedDict):
+    """Server-authoritative billing view for customer screens, support, and reconciliation."""
     business_id: str
+    as_of: str
     account: dict[str, Any]
-    subscription: dict[str, Any] | None
+    subscription: SubscriptionSummary | None
     balances: Balance
     credit_lots: list[dict[str, Any]]
     budgets: list[dict[str, Any]]
     pauses: list[dict[str, Any]]
     replication: dict[str, Any]
+    delivery: DeliveryConfigurationResult
 
 
 class BillingSummaryResponse(BaseEnvelope):

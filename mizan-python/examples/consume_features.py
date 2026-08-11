@@ -4,18 +4,22 @@ These functions are examples only; call them from a trusted backend with a real
 client, durable source event IDs, and idempotency keys stored with those events.
 """
 from mizan import (
+    Channel,
     Conversation24HConsumptionRequest,
     MizanClient,
     conversation_24h,
 )
 
 
-def queueable_conversation(source_event_id: str, occurred_at: str) -> Conversation24HConsumptionRequest:
+def queueable_conversation(source_event_id: str, occurred_at: str,
+                           conversation_id: str) -> Conversation24HConsumptionRequest:
     """Build JSON-safe usage for an outbox without sending it immediately."""
     return conversation_24h(
         source_event_id=source_event_id,
         occurred_at=occurred_at,
-        # quantity omitted: exactly one 24-hour conversation window.
+        conversation_id=conversation_id,
+        channel=Channel.WHATSAPP,
+        # Report activity; Mizan decides whether a new 24-hour window opens.
     )
 
 
@@ -23,15 +27,17 @@ def consume_every_feature(client: MizanClient, business_id: str, occurred_at: st
     """Show the distinct canonical method signature for every feature code."""
     client.consume_conversation_24h(
         business_id, source_event_id="conversation-1", occurred_at=occurred_at,
+        conversation_id="conversation-1", channel=Channel.WHATSAPP,
         idempotency_key="consume:conversation-1",
     )
     client.consume_outbound_delivered_message(
         business_id, source_event_id="message-1", occurred_at=occurred_at,
         idempotency_key="consume:message-1",
     )
-    client.consume_ai_assist_action_over_allowance(
-        business_id, source_event_id="assist-overage-1", occurred_at=occurred_at,
-        idempotency_key="consume:assist-overage-1",
+    # Report every action; Mizan returns included-versus-billable allowance facts.
+    client.consume_ai_assist_action(
+        business_id, source_event_id="assist-action-1", occurred_at=occurred_at,
+        idempotency_key="consume:assist-action-1",
     )
     client.consume_voice_ai_started_minute(
         business_id, source_event_id="voice-ai-1", occurred_at=occurred_at,
@@ -61,6 +67,7 @@ def consume_every_feature(client: MizanClient, business_id: str, occurred_at: st
     client.consume_other_provider_charge(
         business_id, source_event_id="provider-fee-1", occurred_at=occurred_at,
         provider="Carrier", provider_event_id="INV1", provider_amount_minor="337",
-        metadata={"provider_invoice_id": "INV-2026-08", "tariff_version": "carrier-v4"},
+        provider_invoice_id="INV-2026-08", original_amount_minor="337",
+        original_currency="SAR", tariff_version="carrier-v4",
         idempotency_key="consume:provider-fee-1",
     )

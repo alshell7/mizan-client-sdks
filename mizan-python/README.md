@@ -16,6 +16,7 @@ The package requires Python 3.10 or newer. The distribution name is `mizan-billi
 
 ## Contents
 
+- [Runnable end-to-end and webhook examples](https://github.com/alshell7/mizan-client-sdks/blob/main/mizan-python/examples/README.md)
 - [Receive webhooks with FastAPI or a custom endpoint](https://github.com/alshell7/mizan-client-sdks/blob/main/WEBHOOKS.md#python-fastapi)
 - [How Mizan fits into your application](#how-mizan-fits-into-your-application)
 - [Install](#install)
@@ -80,6 +81,7 @@ from mizan import MizanClient
 client = MizanClient(
     base_url=os.environ["MIZAN_BASE_URL"],
     token=os.environ["MIZAN_API_TOKEN"],
+    business_id=os.environ["MIZAN_BUSINESS_ID"],
     timeout=10.0,
     max_attempts=3,
 )
@@ -88,7 +90,8 @@ client = MizanClient(
 | Option | Meaning | Recommended production value |
 |---|---|---|
 | `base_url` | Mizan environment URL | Environment variable |
-| `token` | Bearer API token | Secret manager value |
+| `token` | Bearer API token | Business-scoped secret manager value |
+| `business_id` | Optional client-side binding for a business-scoped token | The token's business ID |
 | `timeout` | Timeout for one HTTP attempt | `10.0` seconds |
 | `max_attempts` | Maximum attempts for retryable mutations | `3` |
 | `logger` | Optional structured logging callback | Redacting application logger |
@@ -100,6 +103,10 @@ The client automatically sends:
 - `X-Request-ID` for correlation;
 - `X-Business-Id` for business-scoped routes;
 - `Idempotency-Key` for mutations.
+
+Production runtime tokens are scoped to one business. Bind that business ID on the client so a route mismatch is
+rejected before any network request. Create one client per business token. Omitting `business_id` remains useful for
+administrative tooling and backwards compatibility; the server still enforces the token's scope.
 
 ### Optional structured logging
 
@@ -117,6 +124,7 @@ def sdk_logger(event: str, fields: Mapping[str, Any]) -> None:
 client = MizanClient(
     os.environ["MIZAN_BASE_URL"],
     os.environ["MIZAN_API_TOKEN"],
+    business_id=os.environ["MIZAN_BUSINESS_ID"],
     logger=sdk_logger,
 )
 ```
@@ -169,6 +177,10 @@ display_sar = Decimal(minor) / Decimal(100)  # Decimal('253')
 ### Idempotency keys
 
 Every mutation must have an idempotency key. The key identifies one business operation, not one HTTP attempt.
+
+For consumption, `source_event_id` identifies exactly one atomic billing decision. Put all charges caused by the
+same domain event in that request's `components`; never reuse the source event for a later feature call. The HTTP
+idempotency key is a separate replay identity and retries must preserve both values and the entire body.
 
 Good keys:
 
@@ -408,7 +420,8 @@ if not preview["data"]["eligible"]:
     print(preview["data"]["reason"])
 ```
 
-Eligibility expires quickly and reserves nothing. Always call `consume` when the billable work actually occurs.
+Eligibility expires quickly, evaluates the currently open subscription month, and reserves nothing. Always call
+`consume` when the billable work actually occurs; a preview never authorizes backdated consumption.
 
 ## Scenario 5: record usage
 
@@ -438,7 +451,9 @@ print(decision["data"]["charges"])
 print(decision["data"]["balances"])
 ```
 
-Choose `source_event_id` from the event in your own system. It is a second deduplication boundary in addition to the HTTP idempotency key.
+Choose `source_event_id` from the event in your own system. It names one atomic decision and cannot be reused for a
+different feature. `occurred_at` must be timezone-aware, no later than now, and inside the subscription's currently
+open month. Persist the actual event timestamp and replay it unchanged; closed-month events cannot be backdated.
 
 ### Contract for every feature code
 
@@ -447,25 +462,27 @@ types describe the actual JSON sent to Mizan; they are not documentation-only al
 
 | Feature code | Exported request contract | Builder | Canonical client method | Billable input |
 |---|---|---|---|---|
-| `conversation_24h` | `Conversation24HConsumptionRequest` | `conversation_24h` | `consume_conversation_24h` | Window quantity, default `"1"` |
+| `conversation_24h` | `Conversation24HConsumptionRequest` | `conversation_24h` | `consume_conversation_24h` | Required `conversation_id` + `channel`; Mizan owns 24-hour window dedupe |
 | `outbound_delivered_message` | `OutboundDeliveredMessageConsumptionRequest` | `outbound_delivered_message` | `consume_outbound_delivered_message` | Delivered-message quantity, default `"1"` |
-| `ai_assist_action_over_allowance` | `AIAssistActionOverAllowanceConsumptionRequest` | `ai_assist_action_over_allowance` | `consume_ai_assist_action_over_allowance` | Over-allowance action quantity, default `"1"` |
+| `ai_assist_action_over_allowance` | `AIAssistActionConsumptionRequest` | `ai_assist_action` | `consume_ai_assist_action` | Every AI assist action; Mizan decides included versus billable |
 | `voice_ai_started_minute` | `VoiceAIStartedMinuteConsumptionRequest` | `voice_ai_started_minute` | `consume_voice_ai_started_minute` | Required positive raw `duration_seconds`; Mizan rounds up |
 | `ai_reply_handling` | `AIReplyHandlingConsumptionRequest` | `ai_reply_handling` | `consume_ai_reply_handling` | Included reply quantity, default `"1"` |
 | `whatsapp_meta_marketing_msg` | `WhatsAppMetaMarketingMessageConsumptionRequest` | `whatsapp_meta_marketing_message` | `consume_whatsapp_meta_marketing_message` | Meta event ID and message quantity, default `"1"`; provider is fixed to `Meta` |
 | `telephony_voice_minute` | `TelephonyVoiceMinuteConsumptionRequest` | `telephony_voice_minute` | `consume_telephony_voice_minute` | Provider-normalized billable minutes, default `"1"` |
 | `inbound_voice_minute` | `InboundVoiceMinuteConsumptionRequest` | `inbound_voice_minute` | `consume_inbound_voice_minute` | Provider-normalized inbound minutes, default `"1"`; currently zero-rated |
-| `other_provider_charge` | `OtherProviderChargeConsumptionRequest` | `other_provider_charge` | `consume_other_provider_charge` | Required exact provider settlement amount in halala; zero is valid |
+| `other_provider_charge` | `OtherProviderChargeConsumptionRequest` | `other_provider_charge` | `consume_other_provider_charge` | Settlement plus invoice, original amount/currency, tariff, and non-SAR FX evidence |
 
 Builders are useful when an application queues or signs the JSON before sending it:
 
 ```python
-from mizan import Conversation24HConsumptionRequest, conversation_24h
+from mizan import Channel, Conversation24HConsumptionRequest, conversation_24h
 
 usage: Conversation24HConsumptionRequest = conversation_24h(
     source_event_id="conversation-window-001",
     occurred_at=datetime.now(timezone.utc).isoformat(),
-    # quantity omitted: exactly one conversation window.
+    conversation_id="conversation-123",
+    channel=Channel.WHATSAPP,
+    # Report the event. Mizan decides whether it opens a new 24-hour window.
 )
 client.consume(business_id, usage, idempotency_key="consume:conversation-window-001")
 ```
@@ -473,13 +490,18 @@ client.consume(business_id, usage, idempotency_key="consume:conversation-window-
 The canonical methods expose each feature's real input instead of a universal quantity object:
 
 ```python
-# The caller must establish that the included AI allowance is exhausted.
-client.consume_ai_assist_action_over_allowance(
+# Report every assist action. Mizan applies the included allowance and returns its decision.
+assist = client.consume_ai_assist_action(
     business_id,
-    source_event_id="assist-overage-001",
+    source_event_id="assist-action-001",
     occurred_at=datetime.now(timezone.utc).isoformat(),
     # quantity defaults to "1".
 )
+print(assist["data"]["charges"][0]["allowance"])
+
+# The compatibility type, builder, and method remain:
+# AIAssistActionOverAllowanceConsumptionRequest,
+# ai_assist_action_over_allowance, and consume_ai_assist_action_over_allowance.
 
 # Raw seconds are required. Do not pre-round: 61 seconds becomes 2 started minutes in Mizan.
 client.consume_voice_ai_started_minute(
@@ -517,15 +539,19 @@ client.consume_inbound_voice_minute(
     provider_event_id="INBOUND-123",
 )
 
-# Exact pass-through settlement amount in halala. Never calculate this with float.
+# Exact SAR settlement for an original USD invoice line. Never calculate this with float.
 client.consume_other_provider_charge(
     business_id,
     source_event_id="provider-fee-001",
     occurred_at=datetime.now(timezone.utc).isoformat(),
     provider="Carrier",
     provider_event_id="invoice-line-123",
-    provider_amount_minor="337",
-    metadata={"provider_invoice_id": "INV-2026-08", "tariff_version": "carrier-v4"},
+    provider_amount_minor="375",
+    provider_invoice_id="INV-2026-08",
+    original_amount_minor="100",
+    original_currency="USD",
+    tariff_version="carrier-v4",
+    fx_rule="USD-SAR:3.75:2026-08",
 )
 ```
 
@@ -533,7 +559,8 @@ Builders reject malformed exact quantities, missing/timezone-less timestamps, mi
 unsupported metadata, and signed-int64 overflow before the client makes an HTTP request. The Worker remains
 authoritative for catalog prices, balances, plan overrides, fair use, and duplicate decisions.
 
-Provider builders return a request whose `metadata` satisfies exported `ProviderUsageMetadata`. Explicit
+Provider builders return a request whose `metadata` satisfies exported `ProviderUsageMetadata`; exact pass-through
+requests use `PassThroughProviderUsageMetadata`. Explicit
 `provider` and `provider_event_id` arguments override any conflicting optional metadata so financial attribution
 cannot drift.
 
@@ -548,6 +575,9 @@ cannot drift.
 | `fx_rule` | Versioned conversion rule when settlement required currency conversion |
 | `tariff_version` | Provider tariff revision used to calculate/normalize the charge |
 
+For a SAR original charge, `original_amount_minor` must equal `provider_amount_minor` and no FX rule is needed. For
+every non-SAR original charge, `fx_rule` is mandatory and must describe the rule used to produce the SAR settlement.
+
 Never store provider credentials, signatures, or complete webhook payloads in metadata.
 
 Every successful HTTP response is an envelope with `api_version`, `catalog_version`, `policy_version`, and
@@ -559,7 +589,7 @@ Every successful HTTP response is an envelope with `api_version`, `catalog_versi
 | `source_event_id` | Your durable event identifier echoed for reconciliation |
 | `ledger_entry_id` | Immutable ledger entry created for the decision |
 | `business_sequence` | Monotonic per-business ordering key for downstream replication |
-| `charges[]` | Per-component `rail`, exact `quantity_millis`, `unit_millis`, `money_minor`, and provider `treatment` |
+| `charges[]` | Per-component `rail`, requested `quantity_millis`, engine-normalized `reported_quantity_millis`, unit/money debits, provider `treatment`, and optional allowance decision |
 | `allocations_by_feature[]` | Azeer credit lots consumed by each feature; empty for non-unit rails |
 | `totals` | Exact aggregate `azeer_unit_millis` and `provider_money_minor` debited by the event |
 | `balances` | Remaining `azeer_unit_millis` and `provider_balance_minor` after commit |
@@ -567,9 +597,15 @@ Every successful HTTP response is an envelope with `api_version`, `catalog_versi
 
 Amounts remain decimal strings. A returned HTTP response is authoritative; eligibility is only a preview.
 
+An AI assist charge's `allowance` contains exact `limit_quantity_millis`, `consumed_before_millis`,
+`consumed_after_millis`, and `billable_quantity_millis`. A conversation charge may return a
+`reported_quantity_millis` that differs from the submitted quantity because Mizan owns the fixed-window decision.
+
 ### Multiple components in one event
 
-Use components when a single product event creates several related charges. Mizan accepts or rejects all components together.
+Use components when a single product event creates several related charges. One `source_event_id` covers that one
+atomic decision, and Mizan accepts or rejects all components together. Do not split the components across requests
+that reuse the same source ID.
 
 ```python
 from mizan import ConsumptionRequest, FeatureCode
@@ -798,14 +834,20 @@ For sensitive provider-priced features, set `sensitive=True` and use the complet
 ```python
 summary = client.get_billing_summary(business_id)["data"]
 
-print(summary["subscription"])
+print(summary["as_of"])
+subscription = summary["subscription"]
+if subscription is not None:
+    print(subscription["status"])           # persisted lifecycle row
+    print(subscription["effective_status"]) # projected at summary["as_of"]
 print(summary["balances"])
 print(summary["credit_lots"])
 print(summary["budgets"])
 print(summary["replication"])
 ```
 
-Use the summary for customer billing screens and support views. Do not reconstruct current balances by replaying ledger entries in the request path.
+Use `effective_status`, not persisted `status`, for current UI decisions. The projection is authoritative at
+`as_of`; it can be `upcoming` or `expired` without rewriting lifecycle history. Use the summary for customer billing
+screens and support views. Do not reconstruct current balances by replaying ledger entries in the request path.
 
 ### Ledger pagination
 
@@ -941,13 +983,17 @@ All public request and response types are exported from `mizan`. The package inc
 ## Production checklist
 
 - [ ] Call the SDK only from trusted server-side code.
-- [ ] Keep the token in a secret manager and use separate tokens per environment.
+- [ ] Keep each business-scoped token in a secret manager; bind its business ID on the client and separate environments.
 - [ ] Fetch and persist `catalog_version` for checkout/change workflows.
 - [ ] Use SDK enums or live `contract_values`; do not invent strings.
 - [ ] Keep money and Azeer values as exact strings.
 - [ ] Derive stable idempotency keys from domain events and persist them.
 - [ ] Retry mutations only with the identical body and key.
-- [ ] Use provider/source event IDs for deduplication and reconciliation.
+- [ ] Use each source event ID for exactly one atomic decision; put related charges in its components.
+- [ ] Persist timezone-aware event times and consume them only in the currently open subscription month.
+- [ ] Send `conversation_id` and `channel` for every conversation event; let Mizan own 24-hour window dedupe.
+- [ ] Report every AI assist action and use the returned allowance decision.
+- [ ] Include invoice, original amount/currency, tariff, and conditional FX evidence for pass-through charges.
 - [ ] Treat eligibility as advisory; use consumption for the final decision.
 - [ ] Log `request_id`, business ID, operation, and idempotency key—never the token.
 - [ ] Alert on exhausted retryable errors, protocol errors, and replication lag.

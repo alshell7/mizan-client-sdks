@@ -20,7 +20,7 @@ from urllib.request import Request, urlopen
 # Builders validate feature-specific facts before the transport layer sees a request.
 from . import builders as usage_builders
 from ._version import __version__
-from .enums import Capability, FeatureCode
+from .enums import Capability, Channel, FeatureCode
 from .models import (
     ActivationRequest,
     ActivationResponse,
@@ -184,6 +184,8 @@ class MizanClient:
     """Thread-safe, calculation-free client for the authoritative Mizan API.
 
     ``base_url`` must be absolute HTTP(S); ``token`` is a server credential.
+    In production, bind the business-scoped token with ``business_id`` so an
+    accidental call for another route scope fails before network I/O.
     ``max_attempts`` applies automatic retries only to mutations, always using
     the original serialized body and idempotency key. Do not mutate client
     configuration while other threads are using it.
@@ -194,6 +196,7 @@ class MizanClient:
         base_url: str,
         token: str,
         *,
+        business_id: str | None = None,
         timeout: float = 10.0,
         max_attempts: int = 3,
         transport: Transport | None = None,
@@ -206,9 +209,12 @@ class MizanClient:
             raise ValueError("base_url must be an absolute HTTP(S) URL without a query or fragment")
         if timeout <= 0 or max_attempts < 1:
             raise ValueError("timeout must be positive and max_attempts must be at least one")
+        if business_id is not None and not business_id:
+            raise ValueError("business_id must not be empty when supplied")
         self.base_url = base_url.rstrip("/")
         # Configuration is immutable by convention after construction for safe shared use.
         self.token = token
+        self.business_id = business_id
         self.timeout = timeout
         self.max_attempts = max_attempts
         self._transport = transport or _default_transport
@@ -282,11 +288,14 @@ class MizanClient:
             business_id, None, mutation=False))
 
     def consume_conversation_24h(self, business_id: str, *, source_event_id: str, occurred_at: str,
-                                 quantity: str = "1", metadata: UsageMetadata | None = None,
+                                 conversation_id: str, channel: Channel,
+                                 metadata: UsageMetadata | None = None,
                                  idempotency_key: str | None = None) -> ConsumptionResponse:
-        """Charge one or more fixed 24-hour conversation windows."""
+        """Report activity; Mizan owns the conversation's 24-hour window decision."""
         return self.consume(business_id, usage_builders.conversation_24h(
-            source_event_id=source_event_id, occurred_at=occurred_at, quantity=quantity, metadata=metadata),
+            source_event_id=source_event_id, occurred_at=occurred_at,
+            conversation_id=conversation_id, channel=channel,
+            metadata=metadata),
             idempotency_key=idempotency_key)
 
     def consume_outbound_delivered_message(self, business_id: str, *, source_event_id: str, occurred_at: str,
@@ -300,10 +309,18 @@ class MizanClient:
     def consume_ai_assist_action_over_allowance(self, business_id: str, *, source_event_id: str, occurred_at: str,
                                                 quantity: str = "1", metadata: UsageMetadata | None = None,
                                                 idempotency_key: str | None = None) -> ConsumptionResponse:
-        """Charge AI-assist actions only after the calling service establishes allowance exhaustion."""
+        """Report every AI-assist action; Mizan owns allowance and overage calculation."""
         return self.consume(business_id, usage_builders.ai_assist_action_over_allowance(
             source_event_id=source_event_id, occurred_at=occurred_at, quantity=quantity, metadata=metadata),
             idempotency_key=idempotency_key)
+
+    def consume_ai_assist_action(self, business_id: str, *, source_event_id: str, occurred_at: str,
+                                 quantity: str = "1", metadata: UsageMetadata | None = None,
+                                 idempotency_key: str | None = None) -> ConsumptionResponse:
+        """Preferred semantic alias for reporting every AI-assist action."""
+        return self.consume_ai_assist_action_over_allowance(
+            business_id, source_event_id=source_event_id, occurred_at=occurred_at,
+            quantity=quantity, metadata=metadata, idempotency_key=idempotency_key)
 
     def consume_ai_reply_handling(self, business_id: str, *, source_event_id: str, occurred_at: str,
                                   quantity: str = "1", metadata: UsageMetadata | None = None,
@@ -353,12 +370,17 @@ class MizanClient:
 
     def consume_other_provider_charge(self, business_id: str, *, source_event_id: str, occurred_at: str,
                                       provider: str, provider_event_id: str, provider_amount_minor: str,
+                                      provider_invoice_id: str, original_amount_minor: str,
+                                      original_currency: str, tariff_version: str,
+                                      fx_rule: str | None = None,
                                       metadata: UsageMetadata | None = None,
                                       idempotency_key: str | None = None) -> ConsumptionResponse:
-        """Debit an exact pass-through provider amount in settlement-currency halala."""
+        """Debit exact SAR settlement with complete original provider invoice evidence."""
         return self.consume(business_id, usage_builders.other_provider_charge(
             source_event_id=source_event_id, occurred_at=occurred_at, provider=provider,
             provider_event_id=provider_event_id, provider_amount_minor=provider_amount_minor,
+            provider_invoice_id=provider_invoice_id, original_amount_minor=original_amount_minor,
+            original_currency=original_currency, tariff_version=tariff_version, fx_rule=fx_rule,
             metadata=metadata), idempotency_key=idempotency_key)
 
     # Compatibility aliases retain complete signatures; canonical names above mirror feature codes.
@@ -412,6 +434,10 @@ class MizanClient:
     def _business_path(self, business_id: str, suffix: str) -> str:
         if not business_id:
             raise ValueError("business_id is required")
+        if self.business_id is not None and business_id != self.business_id:
+            raise ValueError(
+                f"client is bound to business_id {self.business_id!r}, not {business_id!r}"
+            )
         return f"/v1/businesses/{quote(business_id, safe='')}/{suffix}"
 
     def _request(

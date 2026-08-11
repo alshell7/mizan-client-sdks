@@ -6,6 +6,19 @@ from mizan import MizanAdminClient, MizanAPIError, MizanClient, MizanProtocolErr
 
 
 class ClientTests(unittest.TestCase):
+    def test_business_scoped_client_rejects_route_scope_mismatch_before_network(self):
+        requests = []
+        client = MizanClient(
+            "https://billing.test", "business-1-secret", business_id="business-1",
+            transport=lambda request, timeout: (requests.append(request) or (200, {}, b'{}')),
+        )
+        client.get_catalog()
+        client.get_billing_summary("business-1")
+        with self.assertRaises(ValueError):
+            client.get_billing_summary("business-2")
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[1].get_header("X-business-id"), "business-1")
+
     def test_feature_convenience_method_defaults_quantity_and_provider_contract(self):
         requests = []
         client = MizanClient("https://billing.test", "secret",
