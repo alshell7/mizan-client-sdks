@@ -2,7 +2,7 @@ module github.com/alshell7/mizan-client-sdks/mizan-go
 
 go 1.22
 
-require github.com/gofiber/fiber/v2 v2.52.13
+require github.com/gofiber/fiber/v2 v2.52.14
 
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
