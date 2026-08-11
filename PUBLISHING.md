@@ -29,9 +29,10 @@ subdirectory-aware module tag:
 
 ```bash
 VERSION=1.8.0
-git tag -s "mizan-go/v$VERSION" -m "mizan-go v$VERSION"
+git tag -a "mizan-go/v$VERSION" -m "mizan-go v$VERSION"
 git push origin "mizan-go/v$VERSION"
 GOPROXY=https://proxy.golang.org go list -m "github.com/alshell7/mizan-client-sdks/mizan-go@v$VERSION"
 ```
 
 Do not use a root `v$VERSION` tag for this monorepo layout.
+If the release workstation has a configured signing key, use `git tag -s` instead of `git tag -a`.
